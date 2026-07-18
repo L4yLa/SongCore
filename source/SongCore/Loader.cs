@@ -802,7 +802,7 @@ namespace SongCore
                 {
                     if (Collections.LevelHashDictionary.TryRemove(level.levelID, out var hash))
                     {
-                        Collections.CustomSongsData.TryRemove(hash, out _);
+                        Collections.CustomSongsData.TryRemove(level.levelID, out _);
                         if (Collections.HashLevelDictionary.TryGetValue(hash, out var levels))
                         {
                             levels.Remove(level.levelID);
