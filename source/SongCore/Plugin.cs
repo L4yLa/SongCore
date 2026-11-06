@@ -40,7 +40,8 @@ namespace SongCore
 
             if (!File.Exists(Collections.DataPath))
             {
-                File.Create(Collections.DataPath);
+                // Disposed right away, otherwise the open handle makes the first save of the session fail.
+                File.Create(Collections.DataPath).Dispose();
             }
             else
             {
