@@ -110,9 +110,15 @@ namespace SongCore
             return diffData;
         }
 
+        /// <summary>
+        /// Completes once the cached song data has been read. Songs must not be loaded before that,
+        /// otherwise the data read afterwards would replace what the refresh created.
+        /// </summary>
+        internal static Task SongDataLoadingTask { get; private set; } = Task.CompletedTask;
+
         internal static void LoadCustomLevelSongData()
         {
-            Task.Run(() =>
+            SongDataLoadingTask = Task.Run(() =>
             {
                 try
                 {

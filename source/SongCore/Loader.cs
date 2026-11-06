@@ -131,7 +131,7 @@ namespace SongCore
             }
         }
 
-        private void HandleSceneTransitionDidFinish(GameScenesManager.SceneTransitionType sceneTransitionType, ScenesTransitionSetupDataSO scenesTransitionSetupData, DiContainer container)
+        private async void HandleSceneTransitionDidFinish(GameScenesManager.SceneTransitionType sceneTransitionType, ScenesTransitionSetupDataSO scenesTransitionSetupData, DiContainer container)
         {
             _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinish;
 
@@ -147,6 +147,7 @@ namespace SongCore
             {
                 Hashing.ReadCachedSongHashes();
                 Hashing.ReadCachedAudioData();
+                await Collections.SongDataLoadingTask;
                 RefreshSongs();
             }
             else
