@@ -209,6 +209,17 @@ namespace SongCore
         /// </summary>
         public async void RefreshLevelPacks()
         {
+            await RefreshLevelPacksAsync();
+        }
+
+        /// <summary>
+        /// Implementation of <see cref="RefreshLevelPacks"/> that can be awaited internally. Loading is
+        /// only reported as finished once this has run to completion, so that no work is left running in
+        /// the background afterwards. The main thread part below is heavy on large libraries, and letting
+        /// it run at an arbitrary point could freeze the game when it lands on a scene transition.
+        /// </summary>
+        private async Task RefreshLevelPacksAsync()
+        {
             CustomLevelsPack?.UpdateBeatmapLevels(CustomLevels.Values.OrderBy(l => l.songName).ToArray());
             WIPLevelsPack?.UpdateBeatmapLevels(CustomWIPLevels.Values.OrderBy(l => l.songName).ToArray());
             CachedWIPLevelsPack?.UpdateBeatmapLevels(CachedWIPLevels.Values.OrderBy(l => l.songName).ToArray());
@@ -237,14 +248,18 @@ namespace SongCore
                 }
             }
 
+            await UnityGame.SwitchToMainThreadAsync();
+
+            // Written back before the level packs are rebuilt, so that anything reacting to the rebuild (for
+            // example BetterSongList) already finds the save data of newly loaded beatmaps. This stays after
+            // the switch to the main thread, since the loader's dictionary is read from the main thread.
+            // ClearLoadedBeatmapLevelsCaches only clears media and level caches, not the save data.
             foreach (var (levelID, loadedSaveData) in LoadedBeatmapSaveData)
             {
                 _customLevelLoader._loadedBeatmapSaveData[levelID] = loadedSaveData;
             }
 
             LoadedBeatmapSaveData.Clear();
-
-            await UnityGame.SwitchToMainThreadAsync();
 
             _beatmapLevelsModel.ClearLoadedBeatmapLevelsCaches();
             _beatmapLevelsModel._customLevelsRepository = CustomLevelsRepository;
@@ -702,7 +717,22 @@ namespace SongCore
 
                     #endregion
 
-                    RefreshLevelPacks();
+                    // Caches are written before the level packs are reflected, so that nothing is left
+                    // running in the background once loading is reported as finished. A failure here must
+                    // not keep the level packs from being refreshed.
+                    try
+                    {
+                        Hashing.UpdateCachedHashesInternal(foundSongPaths.Keys);
+                        Hashing.UpdateCachedAudioDataInternal(foundSongPaths.Keys);
+                        await Collections.SaveCustomLevelSongDataAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.Error("Failed to save song caches:");
+                        Plugin.Log.Error(ex);
+                    }
+
+                    await RefreshLevelPacksAsync();
                 }
                 catch (Exception ex)
                 {
@@ -718,11 +748,6 @@ namespace SongCore
 
                 _loadingTask = null;
                 await UnityMainThreadTaskScheduler.Factory.StartNew(() => SongsLoadedEvent?.Invoke(this, CustomLevels));
-
-                // Write our cached hash info and
-                Hashing.UpdateCachedHashesInternal(foundSongPaths.Keys);
-                Hashing.UpdateCachedAudioDataInternal(foundSongPaths.Keys);
-                await Collections.SaveCustomLevelSongDataAsync();
             };
 
             try
@@ -737,7 +762,15 @@ namespace SongCore
 
             if (_loadingTask.IsCompleted && !_loadingTask.IsCanceled)
             {
-                await Task.Run(finish);
+                try
+                {
+                    await Task.Run(finish);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error("Failed to finish song loading:");
+                    Plugin.Log.Error(ex);
+                }
             }
             else
             {
