@@ -50,6 +50,7 @@ namespace SongCore.Utilities
         /// <param name="currentSongPaths"></param>
         internal static void UpdateCachedHashesInternal(ICollection<string> currentSongPaths)
         {
+            currentSongPaths = ToSet(currentSongPaths);
             foreach (var levelPath in cachedSongHashData.Keys)
             {
                 var absolutePath = GetAbsolutePath(levelPath);
@@ -103,6 +104,7 @@ namespace SongCore.Utilities
         /// <param name="currentSongPaths"></param>
         internal static void UpdateCachedAudioDataInternal(ICollection<string> currentSongPaths)
         {
+            currentSongPaths = ToSet(currentSongPaths);
             foreach (var levelPath in cachedAudioData.Keys)
             {
                 var absolutePath = GetAbsolutePath(levelPath);
@@ -122,6 +124,16 @@ namespace SongCore.Utilities
                 Plugin.Log.Error($"Error saving cached song durations: {ex.Message}");
                 Plugin.Log.Error(ex);
             }
+        }
+
+        /// <summary>
+        /// The paths passed in are usually a ConcurrentDictionary.Keys snapshot, which is list backed, so
+        /// Contains() is O(n) and pruning a large library becomes O(n^2). An existing HashSet is reused
+        /// as-is to keep the caller's equality comparer.
+        /// </summary>
+        private static ICollection<string> ToSet(ICollection<string> paths)
+        {
+            return paths as HashSet<string> ?? new HashSet<string>(paths);
         }
 
         private static long GetDirectoryHash(string directory)
