@@ -46,6 +46,11 @@ namespace SongCore
         private Task? _loadingTask;
         private CancellationTokenSource _loadingTaskCancellationTokenSource = new();
 
+        // Refreshes requested while a scene transition is in progress are deferred until it has finished,
+        // since updating the level selection UI of a menu that is being dismissed breaks its navigation.
+        private bool _isInSceneTransition;
+        private bool? _pendingFullRefresh;
+
         private Loader(GameScenesManager gameScenesManager, LevelFilteringNavigationController levelFilteringNavigationController, LevelPackDetailViewController levelPackDetailViewController, BeatmapLevelsModel beatmapLevelsModel, CustomLevelLoader customLevelLoader, SpriteAsyncLoader spriteAsyncLoader, BeatmapCharacteristicCollection beatmapCharacteristicCollection, ProgressBar progressBar, PluginConfig config, SettingsController settingsController, BSMLSettings bsmlSettings)
 
         {
@@ -111,6 +116,7 @@ namespace SongCore
             SceneManager.activeSceneChanged -= HandleActiveSceneChanged;
 
             _gameScenesManager.transitionDidStartEvent -= HandleSceneTransitionDidStart;
+            _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinishAfterInit;
 
             SongsLoadedEvent -= HandleSongsLoaded;
         }
@@ -158,6 +164,7 @@ namespace SongCore
             SceneManager.activeSceneChanged += HandleActiveSceneChanged;
 
             _gameScenesManager.transitionDidStartEvent += HandleSceneTransitionDidStart;
+            _gameScenesManager.transitionDidFinishEvent += HandleSceneTransitionDidFinishAfterInit;
         }
 
         private void HandleSongsLoaded(Loader loader, ConcurrentDictionary<string, BeatmapLevel> customLevels)
@@ -208,7 +215,20 @@ namespace SongCore
 
         private void HandleSceneTransitionDidStart(GameScenesManager.SceneTransitionType sceneTransitionType, float duration)
         {
+            _isInSceneTransition = true;
             CancelSongLoading();
+        }
+
+        private void HandleSceneTransitionDidFinishAfterInit(GameScenesManager.SceneTransitionType sceneTransitionType, ScenesTransitionSetupDataSO scenesTransitionSetupData, DiContainer container)
+        {
+            _isInSceneTransition = false;
+
+            // A refresh deferred on the way into a level is kept until the transition back to the menu has finished.
+            if (_pendingFullRefresh is { } fullRefresh && SceneManager.GetActiveScene().name != SceneNames.kGameCoreSceneName)
+            {
+                _pendingFullRefresh = null;
+                RefreshSongs(fullRefresh);
+            }
         }
 
         private void CancelSongLoading()
@@ -304,6 +324,12 @@ namespace SongCore
         {
             if (AreSongsLoading || SceneManager.GetActiveScene().name == SceneNames.kGameCoreSceneName)
             {
+                return;
+            }
+
+            if (_isInSceneTransition)
+            {
+                _pendingFullRefresh = _pendingFullRefresh == true || fullRefresh;
                 return;
             }
 
