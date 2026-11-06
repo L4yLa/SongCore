@@ -162,6 +162,11 @@ namespace SongCore
 
         private void HandleSongsLoaded(Loader loader, ConcurrentDictionary<string, BeatmapLevel> customLevels)
         {
+            // This runs on the main thread. Scanning the whole hash cache once per duplicate is O(n*m) and
+            // stalls the menu on large libraries, so the cache is grouped by hash once instead. The output
+            // and the ordinal hash comparison are unchanged.
+            Dictionary<string, List<string>>? pathsByHash = null;
+
             foreach (var (hash, levels) in Collections.HashLevelDictionary)
             {
                 if (levels.Count <= 1)
@@ -169,13 +174,34 @@ namespace SongCore
                     continue;
                 }
 
+                if (pathsByHash == null)
+                {
+                    pathsByHash = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+                    foreach (var cachedSong in Hashing.cachedSongHashData)
+                    {
+                        if (cachedSong.Value.songHash == null)
+                        {
+                            continue;
+                        }
+
+                        if (!pathsByHash.TryGetValue(cachedSong.Value.songHash, out var cachedPaths))
+                        {
+                            cachedPaths = new List<string>();
+                            pathsByHash[cachedSong.Value.songHash] = cachedPaths;
+                        }
+
+                        cachedPaths.Add(cachedSong.Key);
+                    }
+                }
+
                 Plugin.Log.Notice("Found duplicates:");
 
-                foreach (var levelPath in Hashing.cachedSongHashData
-                             .Where(x => x.Value.songHash == hash)
-                             .Select(x => x.Key))
+                if (pathsByHash.TryGetValue(hash, out var levelPaths))
                 {
-                    Plugin.Log.Notice($"  {levelPath}");
+                    foreach (var levelPath in levelPaths)
+                    {
+                        Plugin.Log.Notice($"  {levelPath}");
+                    }
                 }
             }
         }
