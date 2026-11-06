@@ -443,7 +443,14 @@ namespace SongCore
                     // Clear removed songs from loaded data, in case they were removed manually.
                     if (_customLevelLoader._loadedBeatmapSaveData.Count > 0)
                     {
+                        // Beatmaps extracted from zips live in subfolders of the WIP cache folder, which are not part
+                        // of songFolders. Without them, every cached WIP level was removed on a quick refresh.
+                        var cacheFolder = new DirectoryInfo(Path.Combine(_customWIPPath, "Cache"));
+                        var cachedFolders = cacheFolder.Exists
+                            ? cacheFolder.EnumerateDirectories().Where(d => d.Exists && !CustomLevelPathHelper.IsHiddenDirectory(d)).Select(d => d.FullName)
+                            : Enumerable.Empty<string>();
                         var folders = songFolders
+                            .Concat(cachedFolders)
                             .Concat(SeparateSongFolders
                                 .Select(f => Path.GetFullPath(f.SongFolderEntry.Path))
                                 .Select(p => new DirectoryInfo(p))
