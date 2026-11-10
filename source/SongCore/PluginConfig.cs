@@ -14,5 +14,12 @@ namespace SongCore
         public virtual bool ForceLongPreviews { get; set; } = true;
         public virtual bool DisableRotationSpawnLinesOverride { get; set; }
         public virtual bool DisableOneSaberOverride { get; set; }
+
+        /// <summary>
+        /// Logs every duplicate beatmap on its own line instead of one line per group of duplicates.
+        /// Only configurable through the config file, as the verbose output is intended for diagnostics
+        /// and is large enough that the log subsystem may start dropping messages on big libraries.
+        /// </summary>
+        public virtual bool VerboseDuplicateLogging { get; set; }
     }
 }

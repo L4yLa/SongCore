@@ -38,14 +38,9 @@ namespace SongCore
         {
             BasicUI.GetIcons();
 
-            if (!File.Exists(Collections.DataPath))
-            {
-                File.Create(Collections.DataPath);
-            }
-            else
-            {
-                _ = Collections.LoadCachedSongDataAsync();
-            }
+            // Song data used to be loaded here, on a fire and forget task. It is now loaded together with the
+            // other caches in the Loader, because loading it also merges the journal, and letting that land
+            // after beatmaps have started loading would throw away everything loaded so far.
 
             Collections.RegisterCustomCharacteristic(BasicUI.MissingCharIcon!, "Missing Characteristic", "Missing Characteristic", "MissingCharacteristic", "MissingCharacteristic", false, false, 1000);
             Collections.RegisterCustomCharacteristic(BasicUI.LightshowIcon!, "Lightshow", "Lightshow", "Lightshow", "Lightshow", false, false, 100);

@@ -5,9 +5,9 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using BGLib.JsonExtension;
 using IPA.Utilities;
 using SongCore.Data;
+using SongCore.Utilities;
 using UnityEngine;
 
 namespace SongCore
@@ -18,11 +18,17 @@ namespace SongCore
         private static readonly List<BeatmapCharacteristicSO> _customCharacteristics = new List<BeatmapCharacteristicSO>();
 
         internal static readonly string DataPath = Path.Combine(UnityGame.UserDataPath, nameof(SongCore), "SongCoreExtraData.dat");
+        internal static readonly JournaledCache<SongData> SongDataCache = new JournaledCache<SongData>("song data", DataPath);
         internal static readonly ConcurrentDictionary<string, string> LevelHashDictionary = new ConcurrentDictionary<string, string>();
         internal static readonly ConcurrentDictionary<string, List<string>> HashLevelDictionary = new ConcurrentDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
+        // Song data is keyed by the beatmap folder rather than the level ID, because a level ID can change
+        // between refreshes when several beatmaps share a hash. This maps the level IDs currently in use
+        // back onto their folder so that the public lookups keep working.
+        private static readonly ConcurrentDictionary<string, string> LevelIdToRelativePath = new ConcurrentDictionary<string, string>();
+
         internal static BeatmapLevelPack? WipLevelPack;
-        internal static ConcurrentDictionary<string, SongData> CustomSongsData = new ConcurrentDictionary<string, SongData>();
+        internal static ConcurrentDictionary<string, SongData> CustomSongsData => SongDataCache.Entries;
 
         public static ReadOnlyCollection<string> capabilities => _capabilities.AsReadOnly();
         public static ReadOnlyCollection<BeatmapCharacteristicSO> customCharacteristics => _customCharacteristics.AsReadOnly();
@@ -45,16 +51,48 @@ namespace SongCore
 
         public static SongData? GetCustomLevelSongData(string levelID)
         {
-            return CustomSongsData.GetValueOrDefault(levelID);
+            return LevelIdToRelativePath.TryGetValue(levelID, out var relativePath) ? CustomSongsData.GetValueOrDefault(relativePath) : null;
         }
 
-        internal static void CreateCustomLevelSongData(string levelID, CustomLevelLoader.LoadedSaveData loadedSaveData)
+        internal static void CreateCustomLevelSongData(string levelID, long directoryHash, CustomLevelLoader.LoadedSaveData loadedSaveData)
         {
-            var extraSongData = new SongData();
-            if (CustomSongsData.TryAdd(levelID, extraSongData))
+            Hashing.TryGetRelativePath(loadedSaveData.customLevelFolderInfo.folderPath, out var relativePath);
+            LevelIdToRelativePath[levelID] = relativePath;
+
+            // Cached data is discarded when the beatmap folder has changed, so edits to an info file are
+            // picked up instead of being masked by whatever was cached first.
+            if (CustomSongsData.TryGetValue(relativePath, out var existing) && existing.directoryHash == directoryHash)
             {
-                extraSongData.PopulateFromLoadedSaveData(loadedSaveData);
+                return;
             }
+
+            var extraSongData = new SongData { directoryHash = directoryHash };
+            extraSongData.PopulateFromLoadedSaveData(loadedSaveData);
+            CustomSongsData[relativePath] = extraSongData;
+            SongDataCache.MarkChanged(relativePath);
+        }
+
+        internal static void RemoveCustomLevelSongData(string levelID)
+        {
+            if (!LevelIdToRelativePath.TryRemove(levelID, out var relativePath))
+            {
+                return;
+            }
+
+            // Several level IDs can point at the same folder while a refresh is in progress, so the entry
+            // is only dropped once nothing refers to it any more.
+            if (LevelIdToRelativePath.Values.Contains(relativePath))
+            {
+                return;
+            }
+
+            CustomSongsData.TryRemove(relativePath, out _);
+            SongDataCache.MarkDeleted(relativePath);
+        }
+
+        internal static void ClearLevelIdLookup()
+        {
+            LevelIdToRelativePath.Clear();
         }
 
         public static SongData.DifficultyData? GetCustomLevelSongDifficultyData(BeatmapKey beatmapKey)
@@ -74,42 +112,38 @@ namespace SongCore
             return diffData;
         }
 
-        internal static async Task LoadCachedSongDataAsync()
+        internal static Task LoadCachedSongDataAsync()
         {
-            if (!File.Exists(DataPath))
-            {
-                return;
-            }
-
-            try
-            {
-                var songData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongData>>(DataPath));
-                if (songData != null)
-                {
-                    CustomSongsData = songData;
-                    Plugin.Log.Info($"Finished loading cached song data for {CustomSongsData.Count} songs.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Error loading cached song data: {ex.Message}");
-                Plugin.Log.Error(ex);
-            }
+            return Task.Run(() => SongDataCache.Load((relativePath, value) => Hashing.IsFolderUnchangedInternal(relativePath, value?.directoryHash)));
         }
 
-        internal static async Task SaveCachedSongDataAsync()
+        /// <summary>
+        /// Drops song data for beatmaps that are no longer present and writes a fresh snapshot.
+        /// </summary>
+        internal static Task SaveCachedSongDataAsync()
         {
-            Plugin.Log.Info($"Saving cached song data for {CustomSongsData.Count} songs.");
+            return Task.Run(() =>
+            {
+                var currentPaths = new HashSet<string>(LevelIdToRelativePath.Values);
+                foreach (var relativePath in CustomSongsData.Keys)
+                {
+                    if (!currentPaths.Contains(relativePath))
+                    {
+                        CustomSongsData.TryRemove(relativePath, out _);
+                    }
+                }
 
-            try
-            {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(CustomSongsData, DataPath));
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Error saving cached song data: {ex.Message}");
-                Plugin.Log.Error(ex);
-            }
+                SongDataCache.WriteSnapshot();
+            });
+        }
+
+        /// <summary>
+        /// Records the song data changed during a quick refresh in the journal instead of rewriting the
+        /// whole snapshot.
+        /// </summary>
+        internal static Task JournalChangedSongDataAsync()
+        {
+            return Task.Run(SongDataCache.AppendPendingChanges);
         }
 
         public static BeatmapCharacteristicSO? RegisterCustomCharacteristic(Sprite icon, string characteristicName, string hintText, string serializedName, string compoundIdPartName,

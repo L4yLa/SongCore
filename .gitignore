@@ -9,6 +9,7 @@
 *.user
 *.userosscache
 *.sln.docstates
+*.log
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -332,3 +333,8 @@ ASALocalRun/
 
 # Local History for Visual Studio
 .localhistory/
+
+# Local build scripts and logs (contain local paths)
+source/SongCore/build.cmd
+source/SongCore/clean.cmd
+source/SongCore/log

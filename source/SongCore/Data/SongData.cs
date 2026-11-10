@@ -12,6 +12,10 @@ namespace SongCore.Data
     [Serializable]
     public class SongData
     {
+        // Hash of the beatmap folder this data was built from. Cached data is discarded when the folder
+        // no longer hashes to this value, so edits to an info file are picked up on the next refresh.
+        public long directoryHash;
+
         public string[] _genreTags;
         public Contributor[] contributors; //convert legacy mappers/lighters fields into contributors
         public string _customEnvironmentName;

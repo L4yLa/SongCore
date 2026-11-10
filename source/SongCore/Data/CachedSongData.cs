@@ -20,13 +20,16 @@ namespace SongCore.Data
     [Serializable]
     public class AudioCacheData
     {
-        public string id;
+        // Durations used to be validated against the level ID, which changes whenever a duplicate
+        // beatmap wins or loses the unsuffixed level ID, causing needless re-parsing of the audio file.
+        // The directory hash describes the beatmap folder itself, so it does not have that problem.
+        public long directoryHash;
         public float duration;
 
         [JsonConstructor]
-        public AudioCacheData(string audioFileHash, float duration)
+        public AudioCacheData(long directoryHash, float duration)
         {
-            id = audioFileHash;
+            this.directoryHash = directoryHash;
             this.duration = duration;
         }
     }

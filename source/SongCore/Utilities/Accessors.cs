@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using IPA.Utilities;
 
@@ -23,14 +22,5 @@ namespace SongCore.Utilities
 
         public static readonly FieldAccessor<BeatmapLevelsRepository, BeatmapLevelPack[]>.Accessor BeatmapLevelPacksAccessor =
             FieldAccessor<BeatmapLevelsRepository, BeatmapLevelPack[]>.GetAccessor(nameof(BeatmapLevelsRepository._beatmapLevelPacks));
-
-        public static readonly FieldAccessor<LevelCollectionTableView, Action<LevelCollectionTableView, BeatmapLevel>>.Accessor TableViewDidSelectLevelEventAccessor =
-            FieldAccessor<LevelCollectionTableView, Action<LevelCollectionTableView, BeatmapLevel>>.GetAccessor(nameof(LevelCollectionTableView.didSelectLevelEvent));
-
-        public static readonly FieldAccessor<LevelCollectionViewController, Action<LevelCollectionViewController, BeatmapLevel>>.Accessor ViewControllerDidSelectLevelEventAccessor =
-            FieldAccessor<LevelCollectionViewController, Action<LevelCollectionViewController, BeatmapLevel>>.GetAccessor(nameof(LevelCollectionViewController.didSelectLevelEvent));
-
-        public static readonly FieldAccessor<StandardLevelDetailViewController, Action<StandardLevelDetailViewController, StandardLevelDetailViewController.ContentType>>.Accessor DidChangeContentEventAccessor =
-            FieldAccessor<StandardLevelDetailViewController, Action<StandardLevelDetailViewController, StandardLevelDetailViewController.ContentType>>.GetAccessor(nameof(StandardLevelDetailViewController.didChangeContentEvent));
     }
 }

@@ -14,10 +14,7 @@ namespace SongCore.Installers
             Container.BindInterfacesAndSelfTo<ColorsUI>().AsSingle();
             Container.Bind<ProgressBar>().FromNewComponentOnNewGameObject().AsSingle();
             Container.BindInterfacesAndSelfTo<RequirementsUI>().AsSingle();
-            Container.Bind<BeatmapLevelCache>().AsSingle();
             Container.BindInterfacesTo<BeatmapVersionDetectionHook>().AsSingle();
-            Container.BindInterfacesTo<BeatmapJsonCacheHooks>().AsSingle();
-            Container.BindInterfacesTo<BeatmapDataCacheHooks>().AsSingle();
             Container.BindInterfacesTo<SongDataMenuHooks>().AsSingle();
             Container.BindInterfacesTo<InternalRestartHook>().AsSingle();
             Container.BindInterfacesTo<BindBeatmapLevelHook>().AsSingle();
@@ -29,7 +26,6 @@ namespace SongCore.Installers
             Container.BindInterfacesTo<LevelListTableCellDataHook>().AsSingle();
             Container.BindInterfacesTo<EscapeURLHook>().AsSingle();
             Container.BindInterfacesTo<ComputeMaxMultipliedScoreSafelyHook>().AsSingle();
-            Container.BindInterfacesTo<IOBlacklistHook>().AsSingle();
         }
     }
 }

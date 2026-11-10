@@ -8,131 +8,167 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using BeatmapLevelSaveDataVersion4;
-using BGLib.JsonExtension;
 using SongCore.Data;
-using SongCore.Hooks.BeatmapLevelCache;
 
 namespace SongCore.Utilities
 {
     public class Hashing
     {
-        internal static ConcurrentDictionary<string, SongHashData> cachedSongHashData = new ConcurrentDictionary<string, SongHashData>();
-        internal static ConcurrentDictionary<string, AudioCacheData> cachedAudioData = new ConcurrentDictionary<string, AudioCacheData>();
         public static readonly string cachedHashDataPath = Path.Combine(IPA.Utilities.UnityGame.UserDataPath, nameof(SongCore), "SongHashData.dat");
         public static readonly string cachedAudioDataPath = Path.Combine(IPA.Utilities.UnityGame.UserDataPath, nameof(SongCore), "SongDurationCache.dat");
 
-        internal static async Task LoadCachedSongHashesAsync()
-        {
-            if (!File.Exists(cachedHashDataPath))
-            {
-                return;
-            }
+        internal static readonly JournaledCache<SongHashData> SongHashCache = new JournaledCache<SongHashData>("hashes", cachedHashDataPath);
+        internal static readonly JournaledCache<AudioCacheData> AudioCache = new JournaledCache<AudioCacheData>("durations", cachedAudioDataPath);
 
-            try
-            {
-                var songHashData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongHashData>>(cachedHashDataPath));
-                if (songHashData != null)
-                {
-                    cachedSongHashData = songHashData;
-                    Plugin.Log.Info($"Finished loading cached hashes for {cachedSongHashData.Count} songs.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Error loading cached song hashes: {ex.Message}");
-                Plugin.Log.Error(ex);
-            }
+        internal static ConcurrentDictionary<string, SongHashData> cachedSongHashData => SongHashCache.Entries;
+        internal static ConcurrentDictionary<string, AudioCacheData> cachedAudioData => AudioCache.Entries;
+
+        private static readonly ConcurrentDictionary<string, string> AbsolutePathCache = new ConcurrentDictionary<string, string>();
+        private static readonly ConcurrentDictionary<string, string> RelativePathCache = new ConcurrentDictionary<string, string>();
+        private static readonly ConcurrentDictionary<string, long> DirectoryHashCache = new ConcurrentDictionary<string, long>();
+
+        internal static Task LoadCachedSongHashesAsync()
+        {
+            // Journal records are only trusted if the beatmap folder still looks exactly the way it did
+            // when the record was written, so changes made while SongCore was not running are picked up.
+            return Task.Run(() => SongHashCache.Load((relativePath, value) => IsFolderUnchangedInternal(relativePath, value?.directoryHash)));
         }
 
-        internal static async Task SaveCachedSongHashesAsync(ICollection<string> currentSongPaths)
+        internal static Task LoadCachedAudioDataAsync()
         {
-            foreach (var levelPath in cachedSongHashData.Keys)
+            return Task.Run(() => AudioCache.Load((relativePath, value) => IsFolderUnchangedInternal(relativePath, value?.directoryHash)));
+        }
+
+        /// <summary>
+        /// For a set record, the folder has to exist and still hash to the stored value. For a delete
+        /// record, the folder has to be gone, otherwise the deletion no longer reflects reality.
+        /// </summary>
+        internal static bool IsFolderUnchangedInternal(string relativePath, long? expectedDirectoryHash)
+        {
+            var absolutePath = GetAbsolutePath(relativePath);
+            var exists = Directory.Exists(absolutePath);
+
+            if (expectedDirectoryHash == null)
+            {
+                return !exists;
+            }
+
+            return exists && GetDirectoryHash(absolutePath) == expectedDirectoryHash.Value;
+        }
+
+        internal static Task SaveCachedSongHashesAsync(ICollection<string> currentSongPaths)
+        {
+            return Task.Run(() => PruneAndSave(SongHashCache, currentSongPaths));
+        }
+
+        internal static Task SaveCachedAudioDataAsync(ICollection<string> currentSongPaths)
+        {
+            return Task.Run(() => PruneAndSave(AudioCache, currentSongPaths));
+        }
+
+        /// <summary>
+        /// Drops entries for beatmaps that are no longer present and writes a fresh snapshot. Every entry
+        /// has just been revalidated by the refresh, so the journal can start over as well.
+        /// </summary>
+        private static void PruneAndSave<T>(JournaledCache<T> cache, ICollection<string> currentSongPaths) where T : class
+        {
+            // The paths passed in are usually a ConcurrentDictionary.Keys snapshot, which is list backed, so
+            // Contains() is O(n) and pruning a large library becomes O(n^2). An existing HashSet is reused
+            // as-is to keep the caller's equality comparer.
+            var currentSongPathSet = currentSongPaths as HashSet<string> ?? new HashSet<string>(currentSongPaths);
+
+            foreach (var levelPath in cache.Entries.Keys)
             {
                 var absolutePath = GetAbsolutePath(levelPath);
-                if (!currentSongPaths.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
+                if (!currentSongPathSet.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
                 {
-                    cachedSongHashData.TryRemove(levelPath, out _);
+                    cache.Entries.TryRemove(levelPath, out _);
                 }
             }
 
-            Plugin.Log.Info($"Saving cached hashes for {cachedSongHashData.Count} songs.");
+            cache.WriteSnapshot();
+        }
 
-            try
+        /// <summary>
+        /// Records the beatmaps changed during a quick refresh in the journals instead of rewriting the
+        /// whole snapshots.
+        /// </summary>
+        internal static Task JournalPendingChangesAsync()
+        {
+            return Task.Run(() =>
             {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedSongHashData, cachedHashDataPath));
-            }
-            catch (Exception ex)
+                SongHashCache.AppendPendingChanges();
+                AudioCache.AppendPendingChanges();
+            });
+        }
+
+        /// <summary>
+        /// Stores the hash of a beatmap and records the change so it can be journaled.
+        /// </summary>
+        private static void StoreSongHash(string relativePath, long directoryHash, string hash)
+        {
+            cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
+            SongHashCache.MarkChanged(relativePath);
+        }
+
+        /// <summary>
+        /// Stores the duration of a beatmap and records the change so it can be journaled.
+        /// </summary>
+        internal static void StoreAudioDuration(string relativePath, long directoryHash, float duration)
+        {
+            cachedAudioData[relativePath] = new AudioCacheData(directoryHash, duration);
+            AudioCache.MarkChanged(relativePath);
+        }
+
+        /// <summary>
+        /// Records that the caches no longer hold anything for a beatmap folder. The memoized directory
+        /// hash is dropped as well, so that a beatmap placed in the same folder later on is not mistaken
+        /// for the removed one.
+        /// </summary>
+        internal static void MarkSongRemoved(string customLevelPath)
+        {
+            DirectoryHashCache.TryRemove(customLevelPath, out _);
+
+            if (TryGetRelativePath(customLevelPath, out var relativePath))
             {
-                Plugin.Log.Error($"Error saving cached song hashes: {ex.Message}");
-                Plugin.Log.Error(ex);
+                SongHashCache.MarkDeleted(relativePath);
+                AudioCache.MarkDeleted(relativePath);
             }
         }
 
-        internal static async Task LoadCachedAudioDataAsync()
+        internal static long GetDirectoryHash(string directory)
         {
-            if (!File.Exists(cachedAudioDataPath))
-            {
-                return;
-            }
-
-            try
-            {
-                var audioData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, AudioCacheData>>(cachedAudioDataPath));
-                if (audioData != null)
-                {
-                    cachedAudioData = audioData;
-                    Plugin.Log.Info($"Finished loading cached durations for {cachedAudioData.Count} songs.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Error loading cached song durations: {ex.Message}");
-                Plugin.Log.Error(ex);
-            }
-        }
-
-        internal static async Task SaveCachedAudioDataAsync(ICollection<string> currentSongPaths)
-        {
-            foreach (var levelPath in cachedAudioData.Keys)
-            {
-                var absolutePath = GetAbsolutePath(levelPath);
-                if (!currentSongPaths.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
-                {
-                    cachedAudioData.TryRemove(levelPath, out _);
-                }
-            }
-
-            Plugin.Log.Info($"Saving cached durations for {cachedAudioData.Count} songs.");
-
-            try
-            {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedAudioData, cachedAudioDataPath));
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Error saving cached song durations: {ex.Message}");
-                Plugin.Log.Error(ex);
-            }
-        }
-
-        private static long GetDirectoryHash(string directory)
-        {
-            long hash = 0;
+            // Combined in a fixed order rather than XORed, because XOR cancels out when the same value
+            // appears twice, so swapping the contents of two files in a folder would go unnoticed.
+            long hash = 17;
             var directoryInfo = new DirectoryInfo(directory);
-            foreach (var f in directoryInfo.EnumerateFiles())
+            foreach (var f in directoryInfo.GetFiles().OrderBy(f => f.Name, StringComparer.Ordinal))
             {
-                hash ^= f.CreationTimeUtc.ToFileTimeUtc();
-                hash ^= f.LastWriteTimeUtc.ToFileTimeUtc();
-                hash ^= f.Name.GetHashCode();
-                hash ^= f.Length;
+                hash = hash * 31 + f.LastWriteTimeUtc.ToFileTimeUtc();
+                hash = hash * 31 + f.Length;
+                hash = hash * 31 + StringComparer.Ordinal.GetHashCode(f.Name);
             }
 
             return hash;
         }
 
+        /// <summary>
+        /// Returns the directory hash of a beatmap folder, computing it at most once per refresh so that
+        /// the hash, duration and song data caches can all validate against it without extra file access.
+        /// </summary>
+        internal static long GetCurrentDirectoryHash(string customLevelPath)
+        {
+            return DirectoryHashCache.GetOrAdd(customLevelPath, GetDirectoryHash);
+        }
+
+        internal static void ClearDirectoryHashCache()
+        {
+            DirectoryHashCache.Clear();
+        }
+
         private static bool GetCachedSongData(string customLevelPath, out long directoryHash, out string cachedSongHash)
         {
-            directoryHash = GetDirectoryHash(customLevelPath);
+            directoryHash = GetCurrentDirectoryHash(customLevelPath);
 
             TryGetRelativePath(customLevelPath, out var relativePath);
             if (cachedSongHashData.TryGetValue(relativePath, out var cachedSong) && cachedSong.directoryHash == directoryHash)
@@ -178,19 +214,11 @@ namespace SongCore.Utilities
                 .Where(File.Exists)
                 .Prepend(infoPath);
 
-            IOBlacklistHook.AllowIO.Value = true;
-            try
-            {
-                var hash = CreateSha1FromLevelFiles(files);
-                TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
-                cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
+            var hash = CreateSha1FromLevelFiles(files);
+            TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
+            StoreSongHash(relativePath, directoryHash, hash);
 
-                return hash;
-            }
-            finally
-            {
-                IOBlacklistHook.AllowIO.Value = false;
-            }
+            return hash;
         }
 
         public static string ComputeCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, BeatmapLevelSaveData beatmapLevelSaveData)
@@ -208,22 +236,28 @@ namespace SongCore.Utilities
                 Path.Combine(customLevelFolderInfo.folderPath, difficultyBeatmap.lightshowDataFilename)
             }).Prepend(audioDataPath).Where(File.Exists).Prepend(infoPath);
 
-            IOBlacklistHook.AllowIO.Value = true;
-            try
-            {
-                var hash = CreateSha1FromLevelFiles(files);
-                TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
-                cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
+            var hash = CreateSha1FromLevelFiles(files);
+            TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
+            StoreSongHash(relativePath, directoryHash, hash);
 
-                return hash;
-            }
-            finally
-            {
-                IOBlacklistHook.AllowIO.Value = false;
-            }
+            return hash;
         }
 
         public static string GetAbsolutePath(string path)
+        {
+            // The same relative paths are converted repeatedly (once when seeding the found song paths
+            // and once per cache pruning pass), and InstallPath cannot change while the game is running,
+            // so the results are memoized. Cleared on a full refresh to drop paths of removed beatmaps.
+            return AbsolutePathCache.GetOrAdd(path, GetAbsolutePathUncached);
+        }
+
+        internal static void ClearPathCaches()
+        {
+            AbsolutePathCache.Clear();
+            RelativePathCache.Clear();
+        }
+
+        private static string GetAbsolutePathUncached(string path)
         {
             path = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
             if (path.StartsWith("." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
@@ -235,6 +269,22 @@ namespace SongCore.Utilities
         }
 
         public static bool TryGetRelativePath(string path, out string relativePath)
+        {
+            // Building the relative path allocates two Uri instances, which is expensive enough to matter
+            // when it runs once per beatmap. InstallPath cannot change while the game is running, so the
+            // results are memoized. Cleared on a full refresh to drop paths of removed beatmaps.
+            if (RelativePathCache.TryGetValue(path, out var cached))
+            {
+                relativePath = cached;
+                return cached != path;
+            }
+
+            var converted = TryGetRelativePathUncached(path, out relativePath);
+            RelativePathCache[path] = relativePath;
+            return converted;
+        }
+
+        private static bool TryGetRelativePathUncached(string path, out string relativePath)
         {
             var fromPath = IPA.Utilities.UnityGame.InstallPath;
 
