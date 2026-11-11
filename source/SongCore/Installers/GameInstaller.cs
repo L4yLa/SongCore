@@ -9,7 +9,6 @@ namespace SongCore.Installers
         {
             Container.BindInterfacesTo<SongDataGameHooks>().AsSingle();
             Container.BindInterfacesTo<DisableSubmissionHooks>().AsSingle();
-            Container.BindInterfacesTo<AllowNegativeVariableNoteJumpSpeedHook>().AsSingle();
             Container.BindInterfacesTo<ConfigWatchersToggle>().AsSingle();
         }
     }

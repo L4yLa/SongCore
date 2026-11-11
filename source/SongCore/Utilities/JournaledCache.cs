@@ -3,7 +3,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 
 namespace SongCore.Utilities
 {
@@ -22,9 +24,10 @@ namespace SongCore.Utilities
         private const string Magic = "SCCACHE";
 
         /// <summary>
-        /// Layout of the snapshot and journal files. Bump when the structure changes.
+        /// Oldest layout of the snapshot and journal files that can still be read. Each cache passes its own
+        /// current layout, so that changing what one cache stores does not invalidate the others.
         /// </summary>
-        private const int FormatVersion = 1;
+        private const int MinimumFormatVersion = 1;
 
         /// <summary>
         /// Meaning of the directory hash stored alongside each entry. Bump when the way it is computed
@@ -36,14 +39,37 @@ namespace SongCore.Utilities
         private const string OpDelete = "del";
 
         private readonly string _name;
+        private readonly int _formatVersion;
         private readonly string _snapshotPath;
         private readonly string _journalPath;
         private readonly object _journalLock = new object();
         private readonly ConcurrentDictionary<string, bool> _pendingChanges = new ConcurrentDictionary<string, bool>();
 
-        internal JournaledCache(string name, string snapshotPath)
+        // Null values and empty arrays are left out, which keeps the files considerably smaller since most
+        // optional fields are unset. Other default values are still written, as some fields use [DefaultValue]
+        // with Populate and would otherwise read back as something else.
+        private static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings
+        {
+            NullValueHandling = NullValueHandling.Ignore,
+            ContractResolver = OmitEmptyArraysContractResolver.Instance
+        };
+
+        // Whether the journal on disk was started by an older layout. Records are only appended to a journal
+        // whose header matches what they are written in.
+        private bool _journalHeaderOutdated;
+
+        // Whether the snapshot on disk no longer matches the entries. A full refresh only rewrites the snapshot
+        // when this is set, so that an unchanged library is not written out again on every launch.
+        private volatile bool _snapshotOutdated;
+
+        /// <param name="formatVersion">
+        /// Current layout of this cache. Bump when what is stored changes in a way an older version could
+        /// not read correctly. Older layouts are still read, and rewritten in the current one.
+        /// </param>
+        internal JournaledCache(string name, string snapshotPath, int formatVersion = MinimumFormatVersion)
         {
             _name = name;
+            _formatVersion = formatVersion;
             _snapshotPath = snapshotPath;
             _journalPath = snapshotPath + ".journal";
         }
@@ -73,7 +99,7 @@ namespace SongCore.Utilities
                 // The journal has been folded into the snapshot, so it can start over.
                 WriteSnapshot();
             }
-            else if (!File.Exists(_journalPath))
+            else if (!File.Exists(_journalPath) || _journalHeaderOutdated)
             {
                 WriteJournalHeader();
             }
@@ -83,6 +109,9 @@ namespace SongCore.Utilities
 
         private void ReadSnapshot()
         {
+            // Cleared again below once a usable snapshot has been read.
+            _snapshotOutdated = true;
+
             if (!File.Exists(_snapshotPath))
             {
                 return;
@@ -91,7 +120,7 @@ namespace SongCore.Utilities
             try
             {
                 using var reader = new JsonTextReader(new StreamReader(_snapshotPath));
-                var snapshot = JsonSerializer.CreateDefault().Deserialize<Snapshot>(reader);
+                var snapshot = JsonSerializer.Create(SerializerSettings).Deserialize<Snapshot>(reader);
                 if (snapshot == null)
                 {
                     Plugin.Log.Warn($"Cached {_name} is empty. Rebuilding.");
@@ -106,6 +135,9 @@ namespace SongCore.Utilities
                 if (snapshot.entries != null)
                 {
                     Entries = snapshot.entries;
+
+                    // An older layout is kept as-is, but written again in the current one by the next save.
+                    _snapshotOutdated = snapshot.format < _formatVersion;
                 }
             }
             catch (Exception ex)
@@ -154,7 +186,7 @@ namespace SongCore.Utilities
                         JournalRecord? record;
                         try
                         {
-                            record = JsonConvert.DeserializeObject<JournalRecord>(line);
+                            record = JsonConvert.DeserializeObject<JournalRecord>(line, SerializerSettings);
                         }
                         catch (JsonException)
                         {
@@ -246,7 +278,13 @@ namespace SongCore.Utilities
             try
             {
                 var header = JsonConvert.DeserializeObject<Header>(headerLine);
-                return header != null && IsHeaderCompatible(header.magic, header.format, header.validation, "journal");
+                if (header == null || !IsHeaderCompatible(header.magic, header.format, header.validation, "journal"))
+                {
+                    return false;
+                }
+
+                _journalHeaderOutdated = header.format < _formatVersion;
+                return true;
             }
             catch (JsonException)
             {
@@ -262,14 +300,14 @@ namespace SongCore.Utilities
                 return false;
             }
 
-            if (format > FormatVersion)
+            if (format > _formatVersion)
             {
                 // Written by a newer SongCore. Partially interpreting it would be worse than starting over.
                 Plugin.Log.Warn($"Cached {_name} {what} was written by a newer version. Rebuilding.");
                 return false;
             }
 
-            if (format != FormatVersion || validation != ValidationVersion)
+            if (format < MinimumFormatVersion || validation != ValidationVersion)
             {
                 Plugin.Log.Warn($"Cached {_name} {what} is outdated. Rebuilding.");
                 return false;
@@ -288,6 +326,7 @@ namespace SongCore.Utilities
         internal void MarkChanged(string key)
         {
             _pendingChanges[key] = true;
+            _snapshotOutdated = true;
         }
 
         /// <summary>
@@ -296,6 +335,29 @@ namespace SongCore.Utilities
         internal void MarkDeleted(string key)
         {
             _pendingChanges[key] = false;
+            _snapshotOutdated = true;
+        }
+
+        /// <summary>
+        /// Records that entries were removed without being journaled, as done when pruning before a snapshot.
+        /// </summary>
+        internal void MarkOutdated()
+        {
+            _snapshotOutdated = true;
+        }
+
+        /// <summary>
+        /// Writes the snapshot only if the entries changed since it was last written or read.
+        /// </summary>
+        internal void WriteSnapshotIfOutdated()
+        {
+            if (!_snapshotOutdated)
+            {
+                Plugin.Log.Info($"Cached {_name} is unchanged. Skipped saving.");
+                return;
+            }
+
+            WriteSnapshot();
         }
 
         internal void ClearPendingChanges()
@@ -306,11 +368,12 @@ namespace SongCore.Utilities
         /// <summary>
         /// Appends everything recorded since the last write to the journal.
         /// </summary>
-        internal void AppendPendingChanges()
+        /// <returns>The number of records written. Logged by the caller, together with the other caches.</returns>
+        internal int AppendPendingChanges()
         {
             if (_pendingChanges.IsEmpty)
             {
-                return;
+                return 0;
             }
 
             var setKeys = new List<string>();
@@ -328,7 +391,7 @@ namespace SongCore.Utilities
             }
 
             _pendingChanges.Clear();
-            AppendToJournal(setKeys, deletedKeys);
+            return AppendToJournal(setKeys, deletedKeys);
         }
 
         /// <summary>
@@ -339,6 +402,9 @@ namespace SongCore.Utilities
         {
             var stopwatch = Stopwatch.StartNew();
 
+            // Cleared before writing, so that a change recorded while the snapshot is being written is not lost.
+            _snapshotOutdated = false;
+
             try
             {
                 var tempPath = _snapshotPath + ".tmp";
@@ -346,10 +412,10 @@ namespace SongCore.Utilities
                 using (var streamWriter = new StreamWriter(tempPath, false))
                 using (var jsonWriter = new JsonTextWriter(streamWriter))
                 {
-                    JsonSerializer.CreateDefault().Serialize(jsonWriter, new Snapshot
+                    JsonSerializer.Create(SerializerSettings).Serialize(jsonWriter, new Snapshot
                     {
                         magic = Magic,
-                        format = FormatVersion,
+                        format = _formatVersion,
                         validation = ValidationVersion,
                         entries = Entries
                     });
@@ -374,6 +440,7 @@ namespace SongCore.Utilities
             }
             catch (Exception ex)
             {
+                _snapshotOutdated = true;
                 Plugin.Log.Error($"Error saving cached {_name}:");
                 Plugin.Log.Error(ex);
             }
@@ -383,14 +450,15 @@ namespace SongCore.Utilities
         /// Appends the given changes to the journal, leaving the snapshot untouched. Used after a quick
         /// refresh, where only a handful of beatmaps have changed.
         /// </summary>
-        internal void AppendToJournal(IReadOnlyCollection<string> setKeys, IReadOnlyCollection<string> deletedKeys)
+        /// <returns>The number of records written.</returns>
+        private int AppendToJournal(IReadOnlyCollection<string> setKeys, IReadOnlyCollection<string> deletedKeys)
         {
             if (setKeys.Count == 0 && deletedKeys.Count == 0)
             {
-                return;
+                return 0;
             }
 
-            var stopwatch = Stopwatch.StartNew();
+            var written = 0;
 
             try
             {
@@ -407,27 +475,29 @@ namespace SongCore.Utilities
                         if (Entries.TryGetValue(key, out var value))
                         {
                             WriteRecord(streamWriter, new JournalRecord { op = OpSet, k = key, v = value });
+                            written++;
                         }
                     }
 
                     foreach (var key in deletedKeys)
                     {
                         WriteRecord(streamWriter, new JournalRecord { op = OpDelete, k = key });
+                        written++;
                     }
                 }
-
-                Plugin.Log.Info($"Journaled {setKeys.Count + deletedKeys.Count} changed cached {_name} in {stopwatch.Elapsed.TotalSeconds:0.###} seconds.");
             }
             catch (Exception ex)
             {
                 Plugin.Log.Error($"Error journaling cached {_name}:");
                 Plugin.Log.Error(ex);
             }
+
+            return written;
         }
 
         private static void WriteRecord(TextWriter writer, JournalRecord record)
         {
-            writer.WriteLine(JsonConvert.SerializeObject(record, Formatting.None));
+            writer.WriteLine(JsonConvert.SerializeObject(record, Formatting.None, SerializerSettings));
         }
 
         private void WriteJournalHeader()
@@ -448,11 +518,12 @@ namespace SongCore.Utilities
 
         private void WriteJournalHeaderCore()
         {
+            _journalHeaderOutdated = false;
             using var streamWriter = new StreamWriter(_journalPath, false);
             streamWriter.WriteLine(JsonConvert.SerializeObject(new Header
             {
                 magic = Magic,
-                format = FormatVersion,
+                format = _formatVersion,
                 validation = ValidationVersion
             }, Formatting.None));
         }
@@ -474,6 +545,48 @@ namespace SongCore.Utilities
         }
 
         #endregion
+
+        /// <summary>
+        /// Leaves out arrays that are empty, but only for members that start out as an empty array. Those read
+        /// back as an empty array when left out, so the data is the same after a round trip. Members that start
+        /// out as null are always written, as null and empty can mean different things there.
+        /// </summary>
+        private sealed class OmitEmptyArraysContractResolver : DefaultContractResolver
+        {
+            internal static readonly OmitEmptyArraysContractResolver Instance = new OmitEmptyArraysContractResolver();
+
+            protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
+            {
+                var property = base.CreateProperty(member, memberSerialization);
+                if (property.PropertyType is not { IsArray: true } || property.ValueProvider == null || !StartsOutEmpty(member, property.ValueProvider))
+                {
+                    return property;
+                }
+
+                var valueProvider = property.ValueProvider;
+                var shouldSerialize = property.ShouldSerialize;
+                property.ShouldSerialize = instance => valueProvider.GetValue(instance) is not Array { Length: 0 } && (shouldSerialize == null || shouldSerialize(instance));
+                return property;
+            }
+
+            private static bool StartsOutEmpty(MemberInfo member, IValueProvider valueProvider)
+            {
+                var declaringType = member.DeclaringType;
+                if (declaringType == null || declaringType.IsAbstract || declaringType.GetConstructor(Type.EmptyTypes) == null)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    return valueProvider.GetValue(Activator.CreateInstance(declaringType)) is Array { Length: 0 };
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+        }
 
         private class Header
         {

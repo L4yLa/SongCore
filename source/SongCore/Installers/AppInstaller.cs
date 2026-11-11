@@ -21,6 +21,7 @@ namespace SongCore.Installers
         {
             Container.BindInstance(_config).AsSingle();
             Container.BindInterfacesTo<AllowNegativeNoteJumpSpeedHook>().AsSingle();
+            Container.BindInterfacesTo<AllowNegativeVariableNoteJumpSpeedHook>().AsSingle();
             Container.BindInterfacesTo<CustomCharacteristicsHook>().AsSingle();
             Container.Bind<IRefreshable>().WithId(refreshableID).To<SongCoreRefreshable>().AsSingle();
             Container.Bind(typeof(IInitializable), typeof(IDisposable), typeof(SongCoreLoaderDidLoad)).To<SongCoreLoaderDidLoad>().AsSingle();

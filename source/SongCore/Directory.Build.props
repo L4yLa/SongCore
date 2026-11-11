@@ -6,6 +6,8 @@
     <BSMTProjectType>BSIPA</BSMTProjectType>
     <GenerateManifest>true</GenerateManifest>
     <BaseManifestPath>manifest.json</BaseManifestPath>
+    <!-- No automatic copy into the game folder, like the other mods in this project. -->
+    <DisableCopyToGame>true</DisableCopyToGame>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' != 'Release'">
@@ -15,7 +17,7 @@
   <!-- Overriding default csproj property values which would otherwise interfere with the manifest regeneration. -->
   <PropertyGroup>
     <Authors>L4yLa_Coop</Authors>
-    <Version>3.16.42</Version>
+    <Version>3.16.43</Version>
   </PropertyGroup>
 
 </Project>

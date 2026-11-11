@@ -67,8 +67,8 @@ namespace SongCore.Utilities
         }
 
         /// <summary>
-        /// Drops entries for beatmaps that are no longer present and writes a fresh snapshot. Every entry
-        /// has just been revalidated by the refresh, so the journal can start over as well.
+        /// Drops entries for beatmaps that are no longer present and writes a fresh snapshot if anything changed.
+        /// Every entry has just been revalidated by the refresh, so the journal can start over as well.
         /// </summary>
         private static void PruneAndSave<T>(JournaledCache<T> cache, ICollection<string> currentSongPaths) where T : class
         {
@@ -82,24 +82,24 @@ namespace SongCore.Utilities
                 var absolutePath = GetAbsolutePath(levelPath);
                 if (!currentSongPathSet.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
                 {
-                    cache.Entries.TryRemove(levelPath, out _);
+                    if (cache.Entries.TryRemove(levelPath, out _))
+                    {
+                        cache.MarkOutdated();
+                    }
                 }
             }
 
-            cache.WriteSnapshot();
+            cache.WriteSnapshotIfOutdated();
         }
 
         /// <summary>
         /// Records the beatmaps changed during a quick refresh in the journals instead of rewriting the
         /// whole snapshots.
         /// </summary>
-        internal static Task JournalPendingChangesAsync()
+        /// <returns>The number of hash and duration records written.</returns>
+        internal static Task<(int hashes, int durations)> JournalPendingChangesAsync()
         {
-            return Task.Run(() =>
-            {
-                SongHashCache.AppendPendingChanges();
-                AudioCache.AppendPendingChanges();
-            });
+            return Task.Run(() => (SongHashCache.AppendPendingChanges(), AudioCache.AppendPendingChanges()));
         }
 
         /// <summary>

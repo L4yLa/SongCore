@@ -1,12 +1,9 @@
-using HMUI;
 using UnityEngine;
 
 namespace SongCore.UI
 {
     internal static class BasicUI
     {
-        private static HoverHintController? hoverHintController = null;
-
         internal static Sprite? MissingCharIcon;
         internal static Sprite? LightshowIcon;
         internal static Sprite? ExtraDiffsIcon;

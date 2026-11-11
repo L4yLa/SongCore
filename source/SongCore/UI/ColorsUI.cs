@@ -24,17 +24,17 @@ namespace SongCore.UI
             _bsmlParser = bsmlParser;
         }
 
-        private ColorSchemeView colorSchemeView;
+        private ColorSchemeView colorSchemeView = null!;
 
         private readonly Color voidColor = new Color(0.5f, 0.5f, 0.5f, 0.25f);
 
         [UIComponent("modal")]
-        private readonly ModalView modal;
+        private readonly ModalView modal = null!;
 
         private Vector3 modalPosition;
 
         [UIComponent("selected-color")]
-        private readonly RectTransform selectedColorTransform;
+        private readonly RectTransform selectedColorTransform = null!;
 
         [UIValue("noteColors")]
         public bool NoteColors
@@ -71,7 +71,8 @@ namespace SongCore.UI
                 _bsmlParser.Parse(BeatSaberMarkupLanguage.Utilities.GetResourceContent(Assembly.GetExecutingAssembly(), "SongCore.UI.colors.bsml"),
                     _standardLevelDetailViewController._standardLevelDetailView.gameObject, this);
             }
-            modal.transform.localPosition = modalPosition;
+            // Assigned by BSML while parsing above.
+            modal!.transform.localPosition = modalPosition;
         }
 
         [UIAction("#post-parse")]

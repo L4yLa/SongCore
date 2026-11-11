@@ -1,4 +1,5 @@
 using System.IO;
+using BGLib.Polyglot;
 using BeatSaberMarkupLanguage;
 using BeatSaberMarkupLanguage.Attributes;
 using BeatSaberMarkupLanguage.Components;
@@ -10,6 +11,7 @@ using static BeatSaberMarkupLanguage.Components.CustomListTableData;
 using HMUI;
 using SongCore.Data;
 using Tweening;
+using UnityEngine.UI;
 using Zenject;
 
 namespace SongCore.UI
@@ -36,10 +38,10 @@ namespace SongCore.UI
             instance = this;
         }
 
-        public static RequirementsUI instance { get; set; }
+        public static RequirementsUI instance { get; set; } = null!;
 
         private const string BUTTON_BSML = "<bg id='root'><action-button id='info-button' text='?' active='~button-glow' interactable='~button-interactable' anchor-pos-x='31' anchor-pos-y='0' pref-width='12' pref-height='9' on-click='button-click'/></bg>";
-        private ImageView buttonBG;
+        private ImageView buttonBG = null!;
         private Color originalColor0;
         private Color originalColor1;
 
@@ -61,8 +63,12 @@ namespace SongCore.UI
         public SongData.DifficultyData? diffData;
         public bool wipFolder;
 
+        // Shown instead of the play button while the selected difficulty cannot be played. Created on first use.
+        private GameObject? _checkButton;
+        private static readonly Color CheckButtonColor = new Color(1f, 0.82f, 0.1f);
+
         [UIComponent("list")]
-        public CustomListTableData customListTableData;
+        public CustomListTableData customListTableData = null!;
 
         private bool _buttonGlow = false;
 
@@ -91,12 +97,12 @@ namespace SongCore.UI
         }
 
         [UIComponent("modal")]
-        private ModalView modal;
+        private ModalView modal = null!;
 
         private Vector3 modalPosition;
 
         [UIComponent("info-button")]
-        private Transform infoButtonTransform;
+        private Transform infoButtonTransform = null!;
 
         [UIComponent("root")]
         protected readonly RectTransform _root = null!;
@@ -178,6 +184,42 @@ namespace SongCore.UI
             modal.Show(true);
             customListTableData.Data.Clear();
 
+            //Problems in the info file, listed first since they are why the map cannot be played
+            if (songData != null)
+            {
+                foreach (var error in songData._validationErrors)
+                {
+                    customListTableData.Data.Add(new CustomCellInfo($"<size=70%>{error}", "Invalid Map Data", MissingReqIcon));
+                }
+
+                if (diffData != null)
+                {
+                    foreach (var error in diffData._validationErrors)
+                    {
+                        customListTableData.Data.Add(new CustomCellInfo($"<size=70%>{error}", "Invalid Difficulty Data", MissingReqIcon));
+                    }
+                }
+
+                foreach (var warning in songData._validationWarnings)
+                {
+                    customListTableData.Data.Add(new CustomCellInfo($"<size=70%>{warning}", "Map Data Warning", WarningIcon));
+                }
+
+                if (diffData != null)
+                {
+                    foreach (var warning in diffData._validationWarnings)
+                    {
+                        customListTableData.Data.Add(new CustomCellInfo($"<size=70%>{warning}", "Difficulty Data Warning", WarningIcon));
+                    }
+                }
+            }
+
+            //The game could not resolve the characteristic, so the difficulty cannot be played
+            if (beatmapKey is { } characteristicKey && characteristicKey.beatmapCharacteristic.serializedName == "MissingCharacteristic")
+            {
+                customListTableData.Data.Add(new CustomCellInfo("<size=70%>The characteristic of this difficulty is not available. A mod that provides it may be missing.", "Unknown Characteristic", MissingReqIcon));
+            }
+
             //Requirements
             if (diffData != null)
             {
@@ -193,15 +235,16 @@ namespace SongCore.UI
             }
 
             //Contributors
-            if (songData.contributors.Length > 0)
+            if (songData != null && songData.contributors.Length > 0)
             {
                 foreach (var author in songData.contributors)
                 {
                     if (author.icon == null)
                     {
-                        if (!string.IsNullOrWhiteSpace(author._iconPath))
+                        if (author._iconPath is { } iconPath && !string.IsNullOrWhiteSpace(iconPath)
+                            && beatmapLevel != null && _customLevelLoader._loadedBeatmapSaveData.TryGetValue(beatmapLevel.levelID, out var loadedSaveData))
                         {
-                            author.icon = Utils.LoadSpriteFromFile(Path.Combine(_customLevelLoader._loadedBeatmapSaveData[beatmapLevel.levelID].customLevelFolderInfo.folderPath, author._iconPath));
+                            author.icon = Utils.LoadSpriteFromFile(Path.Combine(loadedSaveData.customLevelFolderInfo.folderPath, iconPath));
                             customListTableData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon != null ? author.icon : InfoIcon));
                         }
                         else
@@ -231,12 +274,12 @@ namespace SongCore.UI
                 }
                 string? environmentName = null;
 
-                if (diffData._environmentNameIdx != null)
+                if (diffData._environmentNameIdx != null && songData != null && beatmapLevel != null && beatmapKey is { } environmentKey)
                 {
                     var environmentInfoName = songData._environmentNames.ElementAtOrDefault(diffData._environmentNameIdx.Value);
                     if (environmentInfoName != null)
                     {
-                        if (environmentInfoName != beatmapLevel.GetEnvironmentName(beatmapKey.Value.beatmapCharacteristic, beatmapKey.Value.difficulty))
+                        if (environmentInfoName != beatmapLevel.GetEnvironmentName(environmentKey.beatmapCharacteristic, environmentKey.difficulty))
                         {
                             environmentName = _environmentsListModel.GetEnvironmentInfoBySerializedNameSafe(environmentInfoName).environmentName;
                         }
@@ -279,8 +322,8 @@ namespace SongCore.UI
 
                 if (customListTableData.Data.Count > 0)
                 {
-                    if (environmentName == null && beatmapLevel != null)
-                        environmentName = beatmapLevel.GetEnvironmentName(beatmapKey.Value.beatmapCharacteristic, beatmapKey.Value.difficulty);
+                    if (environmentName == null && beatmapLevel != null && beatmapKey is { } key)
+                        environmentName = beatmapLevel.GetEnvironmentName(key.beatmapCharacteristic, key.difficulty);
                     customListTableData.Data.Add(new CustomCellInfo("<size=75%>Environment Info", $"This Map uses the Environment: {environmentName}", EnvironmentIcon));
 
                 }
@@ -307,6 +350,72 @@ namespace SongCore.UI
                     modal.Hide(true);
                 }
             }
+        }
+
+        /// <summary>
+        /// Replaces the play button with a yellow "Check" button that opens the same list as the "?" button.
+        /// A disabled play button alone is easy to overlook, so the reason is one click away instead.
+        /// </summary>
+        internal void SetPlayBlocked(bool blocked)
+        {
+            var actionButton = _standardLevelDetailViewController._standardLevelDetailView.actionButton;
+            if (blocked && _checkButton == null)
+            {
+                _checkButton = CreateCheckButton(actionButton);
+            }
+
+            if (_checkButton != null)
+            {
+                _checkButton.SetActive(blocked);
+            }
+
+            actionButton.gameObject.SetActive(!blocked);
+            // Kept in sync as well, since other mods may check whether the play button can be pressed.
+            actionButton.interactable = !blocked;
+        }
+
+        private GameObject CreateCheckButton(Button actionButton)
+        {
+            // A copy of the play button keeps its size and its place in the button row.
+            var checkButton = Object.Instantiate(actionButton.gameObject, actionButton.transform.parent, false);
+            checkButton.name = "SongCoreCheckButton";
+            checkButton.transform.SetSiblingIndex(actionButton.transform.GetSiblingIndex() + 1);
+
+            // The localization component would put the play text back, and the state animations would
+            // replace the color whenever the button is hovered.
+            foreach (var localizedText in checkButton.GetComponentsInChildren<LocalizedTextMeshProUGUI>(true))
+            {
+                Object.DestroyImmediate(localizedText);
+            }
+
+            foreach (var animations in checkButton.GetComponentsInChildren<ButtonStaticAnimations>(true))
+            {
+                Object.DestroyImmediate(animations);
+            }
+
+            var text = checkButton.GetComponentInChildren<TMPro.TMP_Text>(true);
+            if (text != null)
+            {
+                text.text = "Check";
+                text.color = Color.black;
+            }
+
+            var background = checkButton.transform.Find("BG")?.GetComponent<ImageView>();
+            if (background != null)
+            {
+                background.color = CheckButtonColor;
+                background.color0 = Color.white;
+                background.color1 = Color.white;
+                background.SetAllDirty();
+            }
+
+            // Replaced rather than cleared, so that listeners copied from the play button cannot start the level.
+            var button = checkButton.GetComponent<Button>();
+            button.onClick = new Button.ButtonClickedEvent();
+            button.onClick.AddListener(ShowRequirements);
+            button.interactable = true;
+
+            return checkButton;
         }
 
         internal void SetRainbowColors(bool shouldSet, bool firstPulse = true)

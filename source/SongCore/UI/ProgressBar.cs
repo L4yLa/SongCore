@@ -15,7 +15,7 @@ namespace SongCore.UI
 {
     public class ProgressBar : MonoBehaviour
     {
-        private TimeTweeningManager _tweeningManager;
+        private TimeTweeningManager _tweeningManager = null!;
 
         [Inject]
         private void Construct(TimeTweeningManager tweeningManager)
@@ -23,13 +23,14 @@ namespace SongCore.UI
             _tweeningManager = tweeningManager;
         }
 
-        private Canvas? _canvas;
-        private CanvasGroup? _canvasGroup;
+        // Created in Awake, which Unity runs as soon as the component is added and before anything else uses it.
+        private Canvas _canvas = null!;
+        private CanvasGroup _canvasGroup = null!;
         private Tweening.FloatTween? _floatTween;
-        private TMP_Text? _pluginNameText;
-        private TMP_Text? _headerText;
-        private Image? _loadingBackg;
-        private Image? _loadingBar;
+        private TMP_Text _pluginNameText = null!;
+        private TMP_Text _headerText = null!;
+        private Image _loadingBackg = null!;
+        private Image _loadingBar = null!;
 
         private static bool _jokeTime = false;
         private static readonly Vector3 Position = new Vector3(0, 2.5f, 2.5f);
@@ -164,6 +165,9 @@ namespace SongCore.UI
             FadeInOutCanvas(0f);
         }
 
+        // CS8602: the transforms of UI components are always RectTransforms, so the 'as' casts below never yield null.
+        // CS0618: CreateText is used as before. Switching to CreateCurvedUIText could change how the text is drawn.
+#pragma warning disable CS8602, CS0618
         private void Awake()
         {
             var time = IPA.Utilities.Utils.CanUseDateTimeNowSafely ? DateTime.Now : DateTime.UtcNow;
@@ -217,6 +221,7 @@ namespace SongCore.UI
             _loadingBar.fillMethod = Image.FillMethod.Horizontal;
             _loadingBar.color = new Color(1, 1, 1, 0.5f);
         }
+#pragma warning restore CS8602, CS0618
 
         private void Update()
         {

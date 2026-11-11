@@ -266,17 +266,21 @@ namespace SongCore.Hooks
 
             var beatmapLevel = _standardLevelDetailViewController.beatmapLevel;
             var beatmapKey = instance.beatmapKey;
-            var actionButton = instance.actionButton;
             var practiceButton = instance.practiceButton;
 
-            actionButton.interactable = true;
-            practiceButton.interactable = true;
+            // When the selected difficulty cannot be played, the play button is replaced by a "Check" button
+            // that shows why. Practice stays available as long as the map itself can be played, as for WIP maps.
+            var playBlocked = false;
+            var practiceBlocked = false;
+
+            instance.actionButton.interactable = true;
 
             _requirementsUI.ButtonGlowColor = false;
             _requirementsUI.ButtonInteractable = false;
 
             if (_songData == null)
             {
+                ApplyButtonsState(practiceButton, playBlocked, practiceBlocked);
                 return;
             }
 
@@ -289,7 +293,7 @@ namespace SongCore.Hooks
                     !difficultyData.additionalDifficultyData._suggestions.Any() &&
                     !difficultyData.additionalDifficultyData._warnings.Any() &&
                     !difficultyData.additionalDifficultyData._information.Any() &&
-                    !_songData!.contributors.Any() && !Utils.DiffHasColors(difficultyData))
+                    !_songData.contributors.Any() && !Utils.DiffHasColors(difficultyData))
                 {
                     _requirementsUI.ButtonGlowColor = false;
                     _requirementsUI.ButtonInteractable = false;
@@ -306,7 +310,7 @@ namespace SongCore.Hooks
                     _requirementsUI.ButtonInteractable = true;
                     if (difficultyData.additionalDifficultyData._warnings.Contains("WIP"))
                     {
-                        actionButton.interactable = false;
+                        playBlocked = true;
                     }
 
                     _requirementsUI.SetRainbowColors(Utils.DiffHasColors(difficultyData));
@@ -317,7 +321,7 @@ namespace SongCore.Hooks
             {
                 _requirementsUI.ButtonGlowColor = true;
                 _requirementsUI.ButtonInteractable = true;
-                actionButton.interactable = false;
+                playBlocked = true;
                 wipFolderSong = true;
 
                 if (difficultyData != null)
@@ -332,18 +336,33 @@ namespace SongCore.Hooks
                 {
                     if (!Collections.capabilities.Contains(requirement))
                     {
-                        actionButton.interactable = false;
-                        practiceButton.interactable = false;
+                        playBlocked = true;
+                        practiceBlocked = true;
                         _requirementsUI.ButtonGlowColor = true;
                         _requirementsUI.ButtonInteractable = true;
                     }
                 }
             }
 
+            // Problems in the info file that affect playing, such as a missing beatmap file or requirements that
+            // cannot be read. Other problems are only listed.
+            if (_songData.HasValidationErrors(difficultyData))
+            {
+                playBlocked = true;
+                practiceBlocked = true;
+                _requirementsUI.ButtonGlowColor = true;
+                _requirementsUI.ButtonInteractable = true;
+            }
+            else if (_songData._validationWarnings.Length > 0 || difficultyData is { _validationWarnings.Length: > 0 })
+            {
+                _requirementsUI.ButtonGlowColor = true;
+                _requirementsUI.ButtonInteractable = true;
+            }
+
             if (beatmapKey.beatmapCharacteristic.serializedName == "MissingCharacteristic")
             {
-                actionButton.interactable = false;
-                practiceButton.interactable = false;
+                playBlocked = true;
+                practiceBlocked = true;
                 _requirementsUI.ButtonGlowColor = true;
                 _requirementsUI.ButtonInteractable = true;
             }
@@ -353,6 +372,14 @@ namespace SongCore.Hooks
             _requirementsUI.songData = _songData;
             _requirementsUI.diffData = difficultyData;
             _requirementsUI.wipFolder = wipFolderSong;
+
+            ApplyButtonsState(practiceButton, playBlocked, practiceBlocked);
+        }
+
+        private void ApplyButtonsState(UnityEngine.UI.Button practiceButton, bool playBlocked, bool practiceBlocked)
+        {
+            _requirementsUI.SetPlayBlocked(playBlocked);
+            practiceButton.interactable = !practiceBlocked;
         }
 
         private void SaveAndRestoreButtonsState(Action<StandardLevelDetailView> original, StandardLevelDetailView instance)

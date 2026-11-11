@@ -8,10 +8,14 @@ namespace SongCore.Hooks
 {
     internal class DisableSubmissionHooks : IInitializable, IDisposable
     {
-        private readonly Submission _submission;
+        // The hooks are created on the first level and kept for the rest of the session instead of being
+        // created and removed every time a level starts. Only the submission of the current level changes,
+        // so it is handed over through _current.
+        private static Hook? _autoplayHook;
+        private static Hook? _playbackHook;
+        private static DisableSubmissionHooks? _current;
 
-        private Hook _autoplayHook = null!;
-        private Hook _playbackHook = null!;
+        private readonly Submission _submission;
 
         private Ticket? _ticket;
 
@@ -22,29 +26,37 @@ namespace SongCore.Hooks
 
         public void Initialize()
         {
-            _autoplayHook = new Hook(typeof(RecPlayBehaviour).GetMethod(nameof(RecPlayBehaviour.Play), BindingFlags.Instance | BindingFlags.NonPublic)!, AutoplayCheck, true);
-            _playbackHook = new Hook(typeof(ObjectsMovementRecorder).GetMethod(nameof(ObjectsMovementRecorder.Init), BindingFlags.Instance | BindingFlags.Public)!, PlaybackCheck, true);
+            _current = this;
+            _autoplayHook ??= new Hook(typeof(RecPlayBehaviour).GetMethod(nameof(RecPlayBehaviour.Play), BindingFlags.Instance | BindingFlags.NonPublic)!, AutoplayCheck, true);
+            _playbackHook ??= new Hook(typeof(ObjectsMovementRecorder).GetMethod(nameof(ObjectsMovementRecorder.Init), BindingFlags.Instance | BindingFlags.Public)!, PlaybackCheck, true);
         }
 
         public void Dispose()
         {
-            _autoplayHook.Dispose();
-            _playbackHook.Dispose();
-        }
-
-        private void AutoplayCheck(Action<RecPlayBehaviour> original, RecPlayBehaviour instance)
-        {
-            original(instance);
-            _ticket ??= _submission.DisableScoreSubmission(nameof(SongCore), "Autoplay is enabled.");
-        }
-
-        private void PlaybackCheck(Action<ObjectsMovementRecorder> original, ObjectsMovementRecorder instance)
-        {
-            original(instance);
-            if (_ticket == null && instance._mode == ObjectsMovementRecorder.Mode.Playback)
+            if (_current == this)
             {
-                _ticket = _submission.DisableScoreSubmission(nameof(SongCore), "Playback is enabled.");
+                _current = null;
             }
+        }
+
+        private static void AutoplayCheck(Action<RecPlayBehaviour> original, RecPlayBehaviour instance)
+        {
+            original(instance);
+            _current?.DisableSubmission("Autoplay is enabled.");
+        }
+
+        private static void PlaybackCheck(Action<ObjectsMovementRecorder> original, ObjectsMovementRecorder instance)
+        {
+            original(instance);
+            if (instance._mode == ObjectsMovementRecorder.Mode.Playback)
+            {
+                _current?.DisableSubmission("Playback is enabled.");
+            }
+        }
+
+        private void DisableSubmission(string reason)
+        {
+            _ticket ??= _submission.DisableScoreSubmission(nameof(SongCore), reason);
         }
     }
 }

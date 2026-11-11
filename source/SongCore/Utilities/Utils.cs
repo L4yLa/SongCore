@@ -11,7 +11,10 @@ namespace SongCore.Utilities
     {
         public static bool IsModInstalled(string modName)
         {
+            // PluginManager.Plugins only lists legacy IPlugin based plugins, which is exactly what it is used for here.
+#pragma warning disable CS0618
             return IPA.Loader.PluginManager.Plugins.Any(mod => mod.Name == modName) || IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName);
+#pragma warning restore CS0618
         }
 
         public static bool DiffHasColors(SongData.DifficultyData songData)

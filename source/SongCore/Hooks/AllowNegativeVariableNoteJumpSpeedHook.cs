@@ -14,14 +14,9 @@ namespace SongCore.Hooks
     /// </summary>
     internal class AllowNegativeVariableNoteJumpSpeedHook : IInitializable, IDisposable
     {
-        private readonly VariableMovementDataProvider _variableMovementDataProvider;
-
+        // Installed once for the whole application rather than every time a level starts. The provider being
+        // updated is taken from the patched method itself, so nothing depends on the game scene container.
         private ILHook _variableMovementDataProviderHook = null!;
-
-        private AllowNegativeVariableNoteJumpSpeedHook(VariableMovementDataProvider variableMovementDataProvider)
-        {
-            _variableMovementDataProvider = variableMovementDataProvider;
-        }
 
         public void Initialize()
         {
@@ -30,8 +25,9 @@ namespace SongCore.Hooks
                 var cursor = new ILCursor(ctx);
                 cursor.RemoveRange(10);
                 cursor.Emit(OpCodes.Ldarg_0);
+                cursor.Emit(OpCodes.Ldarg_0);
                 cursor.Emit(OpCodes.Ldarg_1);
-                cursor.EmitDelegate(GetNoteJumpMovementSpeed);
+                cursor.EmitDelegate<Func<VariableMovementDataProvider, float, float>>(GetNoteJumpMovementSpeed);
             }, true);
         }
 
@@ -40,10 +36,10 @@ namespace SongCore.Hooks
             _variableMovementDataProviderHook.Dispose();
         }
 
-        private float GetNoteJumpMovementSpeed(float songTime)
+        private static float GetNoteJumpMovementSpeed(VariableMovementDataProvider variableMovementDataProvider, float songTime)
         {
-            var noteJumpSpeed = _variableMovementDataProvider._initNoteJumpMovementSpeed + _variableMovementDataProvider._relativeNoteJumpSpeedInterpolation.GetValue(songTime);
-            return _variableMovementDataProvider._initNoteJumpMovementSpeed > 0
+            var noteJumpSpeed = variableMovementDataProvider._initNoteJumpMovementSpeed + variableMovementDataProvider._relativeNoteJumpSpeedInterpolation.GetValue(songTime);
+            return variableMovementDataProvider._initNoteJumpMovementSpeed > 0
                 ? Mathf.Max(noteJumpSpeed, VariableMovementDataProvider.kMinNoteJumpMovementSpeed)
                 : Mathf.Min(noteJumpSpeed, -VariableMovementDataProvider.kMinNoteJumpMovementSpeed);
         }

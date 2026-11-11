@@ -37,7 +37,7 @@ namespace SongCore.Data
         public readonly ConcurrentDictionary<string, BeatmapLevel> Levels = new ConcurrentDictionary<string, BeatmapLevel>();
 
         public SongFolderEntry SongFolderEntry { get; private set; }
-        public SongCoreCustomBeatmapLevelPack LevelPack { get; private set; } = null;
+        public SongCoreCustomBeatmapLevelPack LevelPack { get; private set; } = null!;
         public SeparateSongFolder? CacheFolder { get; private set; }
 
         public SeparateSongFolder(SongFolderEntry folderEntry, SeparateSongFolder? cacheFolder = null)
