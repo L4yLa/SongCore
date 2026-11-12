@@ -43,6 +43,9 @@ namespace SongCore.Utilities
         private readonly string _snapshotPath;
         private readonly string _journalPath;
         private readonly object _journalLock = new object();
+        private readonly object _loadLock = new object();
+        private readonly object _snapshotLock = new object();
+        private bool _loaded;
         private readonly ConcurrentDictionary<string, bool> _pendingChanges = new ConcurrentDictionary<string, bool>();
 
         // Null values and empty arrays are left out, which keeps the files considerably smaller since most
@@ -74,7 +77,11 @@ namespace SongCore.Utilities
             _journalPath = snapshotPath + ".journal";
         }
 
-        internal ConcurrentDictionary<string, T> Entries { get; private set; } = new ConcurrentDictionary<string, T>();
+        /// <summary>
+        /// The same dictionary for the whole session. Loading fills it in place rather than replacing it, since
+        /// mods built against older versions may hold on to it through the fields that used to expose it.
+        /// </summary>
+        internal ConcurrentDictionary<string, T> Entries { get; } = new ConcurrentDictionary<string, T>();
 
         #region Reading
 
@@ -88,6 +95,22 @@ namespace SongCore.Utilities
         /// snapshot, since the snapshot was already validated when it was written.
         /// </param>
         internal void Load(Func<string, T?, bool> validate)
+        {
+            // Loading twice would read back what is on disk and drop every change not saved yet, so only the first
+            // call loads. Later calls, such as from the old public API, wait for it to finish instead.
+            lock (_loadLock)
+            {
+                if (_loaded)
+                {
+                    return;
+                }
+
+                LoadCore(validate);
+                _loaded = true;
+            }
+        }
+
+        private void LoadCore(Func<string, T?, bool> validate)
         {
             var stopwatch = Stopwatch.StartNew();
 
@@ -134,7 +157,7 @@ namespace SongCore.Utilities
 
                 if (snapshot.entries != null)
                 {
-                    Entries = snapshot.entries;
+                    ReplaceEntries(snapshot.entries);
 
                     // An older layout is kept as-is, but written again in the current one by the next save.
                     _snapshotOutdated = snapshot.format < _formatVersion;
@@ -144,7 +167,16 @@ namespace SongCore.Utilities
             {
                 // Also covers the old headerless format, which is intentionally not migrated.
                 Plugin.Log.Warn($"Could not read cached {_name}. Rebuilding. ({ex.Message})");
-                Entries = new ConcurrentDictionary<string, T>();
+                Entries.Clear();
+            }
+        }
+
+        private void ReplaceEntries(ConcurrentDictionary<string, T> entries)
+        {
+            Entries.Clear();
+            foreach (var entry in entries)
+            {
+                Entries[entry.Key] = entry.Value;
             }
         }
 
@@ -399,6 +431,16 @@ namespace SongCore.Utilities
         /// has been revalidated anyway.
         /// </summary>
         internal void WriteSnapshot()
+        {
+            // Saves can be requested from the old public API while SongCore is saving, and both would write to the
+            // same temporary file.
+            lock (_snapshotLock)
+            {
+                WriteSnapshotCore();
+            }
+        }
+
+        private void WriteSnapshotCore()
         {
             var stopwatch = Stopwatch.StartNew();
 

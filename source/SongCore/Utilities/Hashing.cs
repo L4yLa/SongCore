@@ -20,8 +20,10 @@ namespace SongCore.Utilities
         internal static readonly JournaledCache<SongHashData> SongHashCache = new JournaledCache<SongHashData>("hashes", cachedHashDataPath);
         internal static readonly JournaledCache<AudioCacheData> AudioCache = new JournaledCache<AudioCacheData>("durations", cachedAudioDataPath);
 
-        internal static ConcurrentDictionary<string, SongHashData> cachedSongHashData => SongHashCache.Entries;
-        internal static ConcurrentDictionary<string, AudioCacheData> cachedAudioData => AudioCache.Entries;
+        // Fields rather than properties, as in 3.16.0, for mods that read them through reflection. The caches never
+        // replace these dictionaries, so the fields always see the current entries. Keys are relative paths.
+        internal static ConcurrentDictionary<string, SongHashData> cachedSongHashData = SongHashCache.Entries;
+        internal static ConcurrentDictionary<string, AudioCacheData> cachedAudioData = AudioCache.Entries;
 
         private static readonly ConcurrentDictionary<string, string> AbsolutePathCache = new ConcurrentDictionary<string, string>();
         private static readonly ConcurrentDictionary<string, string> RelativePathCache = new ConcurrentDictionary<string, string>();
@@ -54,6 +56,58 @@ namespace SongCore.Utilities
             }
 
             return exists && GetDirectoryHash(absolutePath) == expectedDirectoryHash.Value;
+        }
+
+        /// <summary>
+        /// Kept for mods built against the old API. SongCore loads the cache itself before the first refresh, and
+        /// reading it again from disk would drop changes that are not saved yet, so this only loads it if that has
+        /// not happened yet, and waits for it otherwise.
+        /// </summary>
+        public static void ReadCachedSongHashes()
+        {
+            LoadCachedSongHashesAsync().GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Kept for mods built against the old API. Drops the cached hashes of beatmaps that are not in the given
+        /// folders and saves the cache.
+        /// </summary>
+        public static void UpdateCachedHashes(HashSet<string> currentSongPaths)
+        {
+            PruneAndSave(SongHashCache, currentSongPaths);
+        }
+
+        /// <summary>
+        /// Kept for mods built against the old API. See <see cref="ReadCachedSongHashes"/>.
+        /// </summary>
+        public static void ReadCachedAudioData()
+        {
+            LoadCachedAudioDataAsync().GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Kept for mods built against the old API. Drops the cached durations of beatmaps that are not in the given
+        /// folders and saves the cache.
+        /// </summary>
+        public static void UpdateCachedAudioData(HashSet<string> currentSongPaths)
+        {
+            PruneAndSave(AudioCache, currentSongPaths);
+        }
+
+        /// <summary>
+        /// The internal method of 3.16.0, kept for mods that call it through reflection.
+        /// </summary>
+        internal static void UpdateCachedHashesInternal(ICollection<string> currentSongPaths)
+        {
+            PruneAndSave(SongHashCache, currentSongPaths);
+        }
+
+        /// <summary>
+        /// The internal method of 3.16.0, kept for mods that call it through reflection.
+        /// </summary>
+        internal static void UpdateCachedAudioDataInternal(ICollection<string> currentSongPaths)
+        {
+            PruneAndSave(AudioCache, currentSongPaths);
         }
 
         internal static Task SaveCachedSongHashesAsync(ICollection<string> currentSongPaths)
@@ -179,6 +233,24 @@ namespace SongCore.Utilities
 
             cachedSongHash = string.Empty;
             return false;
+        }
+
+        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
+        public static string GetCustomLevelHash(BeatmapLevel level)
+        {
+            return ComputeCustomLevelHash(level);
+        }
+
+        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
+        public static string GetCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, StandardLevelInfoSaveData standardLevelInfoSaveData)
+        {
+            return ComputeCustomLevelHash(customLevelFolderInfo, standardLevelInfoSaveData);
+        }
+
+        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
+        public static string GetCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, BeatmapLevelSaveData beatmapLevelSaveData)
+        {
+            return ComputeCustomLevelHash(customLevelFolderInfo, beatmapLevelSaveData);
         }
 
         public static string ComputeCustomLevelHash(BeatmapLevel level)
@@ -344,7 +416,33 @@ namespace SongCore.Utilities
 
         private static string CreateSha1FromLevelFiles(IEnumerable<string> files)
         {
+            return CreateSha1(null, files);
+        }
+
+        /// <summary>
+        /// The helper of 3.16.0, kept for mods that call it through reflection. Hashes the given bytes followed by
+        /// the contents of the files, the same way 3.16.0 did.
+        /// </summary>
+        private static string CreateSha1FromFilesWithPrependBytes(byte[] prependBytes, IEnumerable<string> files)
+        {
+            return CreateSha1(prependBytes, files);
+        }
+
+        /// <summary>
+        /// The helper of 3.16.0, kept for mods that call it through reflection. Returns upper case hexadecimal.
+        /// </summary>
+        private static string ByteToHexBitFiddle(byte[] bytes)
+        {
+            return ToHexString(bytes);
+        }
+
+        private static string CreateSha1(byte[]? prependBytes, IEnumerable<string> files)
+        {
             using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+            if (prependBytes != null)
+            {
+                incrementalHash.AppendData(prependBytes);
+            }
 
             var buffer = ArrayPool<byte>.Shared.Rent(131072);
             try

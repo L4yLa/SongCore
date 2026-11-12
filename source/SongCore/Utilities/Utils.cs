@@ -17,6 +17,19 @@ namespace SongCore.Utilities
 #pragma warning restore CS0618
         }
 
+        [Obsolete("Use the overload that takes a SongData.", true)]
+        public static bool DiffHasColors(ExtraSongData.DifficultyData songData)
+        {
+            return songData._colorLeft != null || songData._colorRight != null || songData._envColorLeft != null || songData._envColorRight != null
+                || songData._envColorLeftBoost != null || songData._envColorRightBoost != null || songData._obstacleColor != null;
+        }
+
+        [Obsolete("Use the overload that takes a SongData.", true)]
+        public static Color ColorFromMapColor(ExtraSongData.MapColor mapColor)
+        {
+            return new Color(mapColor.r, mapColor.g, mapColor.b, mapColor.a);
+        }
+
         public static bool DiffHasColors(SongData.DifficultyData songData)
         {
             return songData._colorLeft != null || songData._colorRight != null || songData._envColorLeft != null || songData._envColorRight != null
@@ -108,4 +121,4 @@ namespace SongCore.Utilities
             }
         }
     }
-}
+}

@@ -14,6 +14,12 @@ namespace SongCore.Installers
             Container.BindInterfacesAndSelfTo<ColorsUI>().AsSingle();
             Container.Bind<ProgressBar>().FromNewComponentOnNewGameObject().AsSingle();
             Container.BindInterfacesAndSelfTo<RequirementsUI>().AsSingle();
+            // The beatmap level cache of 3.16.0, kept for mods built against it. It only records what the game does.
+            Container.BindInterfacesAndSelfTo<EventProxyHooks>().AsSingle();
+            Container.Bind<BeatmapLevelCache>().AsSingle();
+            Container.BindInterfacesTo<BeatmapJsonCacheHooks>().AsSingle();
+            Container.BindInterfacesTo<BeatmapDataCacheHooks>().AsSingle();
+            Container.BindInterfacesTo<IOBlacklistHooks>().AsSingle();
             Container.BindInterfacesTo<BeatmapVersionDetectionHook>().AsSingle();
             Container.BindInterfacesTo<SongDataMenuHooks>().AsSingle();
             Container.BindInterfacesTo<InternalRestartHook>().AsSingle();

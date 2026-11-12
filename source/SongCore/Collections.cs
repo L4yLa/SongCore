@@ -34,7 +34,12 @@ namespace SongCore
         private static readonly object LevelIdLookupLock = new object();
 
         internal static BeatmapLevelPack? WipLevelPack;
-        internal static ConcurrentDictionary<string, SongData> CustomSongsData => SongDataCache.Entries;
+        // Song data by beatmap folder, relative to the game folder. This is what is cached.
+        internal static ConcurrentDictionary<string, SongData> SongDataByPath => SongDataCache.Entries;
+
+        // Song data by level ID, for the level IDs currently in use. The values are the same objects as in
+        // SongDataByPath. A field keyed by level ID, as in 3.16.0, for mods that read it through reflection.
+        internal static ConcurrentDictionary<string, SongData> CustomSongsData = new ConcurrentDictionary<string, SongData>();
 
         public static ReadOnlyCollection<string> capabilities => _capabilities.AsReadOnly();
         public static ReadOnlyCollection<BeatmapCharacteristicSO> customCharacteristics => _customCharacteristics.AsReadOnly();
@@ -42,6 +47,12 @@ namespace SongCore
         public static bool songWithHashPresent(string hash)
         {
             return HashLevelDictionary.ContainsKey(hash);
+        }
+
+        [Obsolete("Use GetCustomLevelHash instead.", true)]
+        public static string hashForLevelID(string levelID)
+        {
+            return GetCustomLevelHash(levelID);
         }
 
         // TODO: Replace by better naming.
@@ -55,9 +66,23 @@ namespace SongCore
             return LevelHashDictionary.TryGetValue(levelID, out var hash) ? hash : string.Empty;
         }
 
+        [Obsolete("Get the loaded save data from CustomLevelLoader._loadedBeatmapSaveData.", true)]
+        public static CustomLevelLoader.LoadedSaveData? GetLoadedSaveData(string levelID)
+        {
+            return Loader.CustomLevelLoader._loadedBeatmapSaveData.TryGetValue(levelID, out var loadedSaveData) ? loadedSaveData : null;
+        }
+
         public static SongData? GetCustomLevelSongData(string levelID)
         {
-            return LevelIdToRelativePath.TryGetValue(levelID, out var relativePath) ? CustomSongsData.GetValueOrDefault(relativePath) : null;
+            return LevelIdToRelativePath.TryGetValue(levelID, out var relativePath) ? SongDataByPath.GetValueOrDefault(relativePath) : null;
+        }
+
+        /// <summary>
+        /// The signature of 3.16.0, kept for mods that call or patch it. The loader goes through it as well.
+        /// </summary>
+        internal static void CreateCustomLevelSongData(string levelID, CustomLevelLoader.LoadedSaveData loadedSaveData)
+        {
+            CreateCustomLevelSongData(levelID, Hashing.GetCurrentDirectoryHash(loadedSaveData.customLevelFolderInfo.folderPath), loadedSaveData);
         }
 
         internal static void CreateCustomLevelSongData(string levelID, long directoryHash, CustomLevelLoader.LoadedSaveData loadedSaveData)
@@ -84,21 +109,41 @@ namespace SongCore
             // Cached data is discarded when the beatmap folder has changed, so edits to an info file are
             // picked up instead of being masked by whatever was cached first. Data read by an older version
             // is read again, so that it is validated the same way as newly added beatmaps.
-            if (CustomSongsData.TryGetValue(relativePath, out var existing) && existing.directoryHash == directoryHash && existing._dataVersion == SongData.CurrentDataVersion)
+            if (SongDataByPath.TryGetValue(relativePath, out var existing) && existing.directoryHash == directoryHash && existing._dataVersion == SongData.CurrentDataVersion)
             {
+                CustomSongsData[levelID] = existing;
                 return;
             }
 
             var extraSongData = new SongData { directoryHash = directoryHash };
             extraSongData.PopulateFromLoadedSaveData(loadedSaveData);
-            CustomSongsData[relativePath] = extraSongData;
+            SongDataByPath[relativePath] = extraSongData;
             SongDataCache.MarkChanged(relativePath);
+
+            lock (LevelIdLookupLock)
+            {
+                CustomSongsData[levelID] = extraSongData;
+
+                // Other level IDs may still point at this folder while a refresh is in progress. They are given the
+                // new data too, so that no level ID is left with the data that was just replaced.
+                if (RelativePathReferenceCount.TryGetValue(relativePath, out var count) && count > 1)
+                {
+                    foreach (var pair in LevelIdToRelativePath)
+                    {
+                        if (pair.Value == relativePath)
+                        {
+                            CustomSongsData[pair.Key] = extraSongData;
+                        }
+                    }
+                }
+            }
         }
 
         internal static void RemoveCustomLevelSongData(string levelID)
         {
             lock (LevelIdLookupLock)
             {
+                CustomSongsData.TryRemove(levelID, out _);
                 if (!LevelIdToRelativePath.TryRemove(levelID, out var relativePath))
                 {
                     return;
@@ -111,7 +156,7 @@ namespace SongCore
                     return;
                 }
 
-                CustomSongsData.TryRemove(relativePath, out _);
+                SongDataByPath.TryRemove(relativePath, out _);
                 SongDataCache.MarkDeleted(relativePath);
             }
         }
@@ -122,6 +167,7 @@ namespace SongCore
             {
                 LevelIdToRelativePath.Clear();
                 RelativePathReferenceCount.Clear();
+                CustomSongsData.Clear();
             }
         }
 
@@ -143,6 +189,29 @@ namespace SongCore
             return false;
         }
 
+        [Obsolete("Get the song data with GetCustomLevelSongData instead.", true)]
+        public static ExtraSongData? RetrieveExtraSongData(string hash)
+        {
+            return GetCustomLevelSongData(CustomLevelLoader.kCustomLevelPrefixId + hash)?.ToExtraSongData();
+        }
+
+        [Obsolete("Get the song difficulty data with GetCustomLevelSongDifficultyData instead.", true)]
+        public static ExtraSongData.DifficultyData? RetrieveDifficultyData(BeatmapLevel beatmapLevel, BeatmapKey beatmapKey)
+        {
+            ExtraSongData? songData = null;
+
+            if (!beatmapLevel.hasPrecalculatedData)
+            {
+                songData = RetrieveExtraSongData(GetCustomLevelHash(beatmapLevel.levelID));
+            }
+
+            var diffData = songData?._difficulties.FirstOrDefault(x =>
+                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.characteristicNameLocalizationKey ||
+                                                        x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.serializedName));
+
+            return diffData;
+        }
+
         public static SongData.DifficultyData? GetCustomLevelSongDifficultyData(BeatmapKey beatmapKey)
         {
             SongData? songData = null;
@@ -158,6 +227,23 @@ namespace SongCore
                                                            x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.serializedName));
 
             return diffData;
+        }
+
+        /// <summary>
+        /// The internal method of 3.16.0, kept for mods that call it through reflection. SongCore loads the cache
+        /// itself, so this only loads it if that has not happened yet, and waits for it otherwise.
+        /// </summary>
+        internal static void LoadCustomLevelSongData()
+        {
+            LoadCachedSongDataAsync().GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// The internal method of 3.16.0, kept for mods that call it through reflection.
+        /// </summary>
+        internal static Task SaveCustomLevelSongDataAsync()
+        {
+            return SaveCachedSongDataAsync();
         }
 
         internal static Task LoadCachedSongDataAsync()
@@ -178,9 +264,9 @@ namespace SongCore
                     currentPaths = new HashSet<string>(RelativePathReferenceCount.Keys);
                 }
 
-                foreach (var relativePath in CustomSongsData.Keys)
+                foreach (var relativePath in SongDataByPath.Keys)
                 {
-                    if (!currentPaths.Contains(relativePath) && CustomSongsData.TryRemove(relativePath, out _))
+                    if (!currentPaths.Contains(relativePath) && SongDataByPath.TryRemove(relativePath, out _))
                     {
                         SongDataCache.MarkOutdated();
                     }

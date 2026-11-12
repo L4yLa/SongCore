@@ -78,8 +78,19 @@ namespace SongCore
         public static event Action<Loader>? LoadingStartedEvent;
         public static event Action<Loader, ConcurrentDictionary<string, BeatmapLevel>>? SongsLoadedEvent;
         public static event Action? OnLevelPacksRefreshed;
+        public static event Action? DeletingSong;
+
+        private static readonly ConcurrentDictionary<string, OfficialSongEntry> OfficialSongs = new ConcurrentDictionary<string, OfficialSongEntry>();
+
+        // Custom levels outside of the WIP folders by level ID, as in 3.16.0, for mods that read it through reflection.
+        // Unlike 3.16.0, it is cleared on a full refresh, so that it does not keep levels that are gone.
+        private static readonly ConcurrentDictionary<string, BeatmapLevel> CustomLevelsById = new ConcurrentDictionary<string, BeatmapLevel>();
 
         private static bool _duplicatesReported;
+
+        // Whether the menu has already been set up once in this session. The hash cache cannot tell, since mods
+        // can load it through the old public API before that happens.
+        private static bool _initialRefreshStarted;
 
         // Relative path prefix shared by beatmaps in the regular custom levels folder, trimmed when logging duplicates.
         private static readonly string CommonLevelPathPrefix = Path.Combine(".", "Beat Saber_Data", CustomLevelPathHelper.kCustomLevelsDirectoryName) + Path.DirectorySeparatorChar;
@@ -153,8 +164,10 @@ namespace SongCore
             defaultCoverImage = _levelPackDetailViewController._defaultCoverSprite;
             beatmapCharacteristicCollection = _beatmapCharacteristicCollection;
 
-            if (Hashing.cachedSongHashData.IsEmpty)
+            if (!_initialRefreshStarted)
             {
+                _initialRefreshStarted = true;
+
                 // All caches are loaded before the first refresh. Loading also merges the journals, and letting
                 // that land after beatmaps have started loading would throw away everything loaded so far.
                 await Task.WhenAll(Hashing.LoadCachedSongHashesAsync(), Hashing.LoadCachedAudioDataAsync(), Collections.LoadCachedSongDataAsync());
@@ -438,6 +451,7 @@ namespace SongCore
                 CustomLevels.Clear();
                 CustomWIPLevels.Clear();
                 CachedWIPLevels.Clear();
+                CustomLevelsById.Clear();
                 Collections.LevelHashDictionary.Clear();
                 Collections.HashLevelDictionary.Clear();
                 Collections.ClearLevelIdLookup();
@@ -457,6 +471,35 @@ namespace SongCore
 
             var job = async () =>
             {
+                #region AddOfficialBeatmaps
+
+                // Only used by TryGetOfficialLevelById, which other mods may still call.
+                try
+                {
+                    void AddOfficialBeatmapLevelsRepository(BeatmapLevelsRepository levelsRepository)
+                    {
+                        foreach (var pack in levelsRepository.beatmapLevelPacks)
+                        {
+                            foreach (var level in pack.AllBeatmapLevels())
+                            {
+                                OfficialSongs[level.levelID] = new OfficialSongEntry { LevelsRepository = levelsRepository, LevelPack = pack, BeatmapLevel = level };
+                            }
+                        }
+                    }
+
+                    OfficialSongs.Clear();
+
+                    AddOfficialBeatmapLevelsRepository(_beatmapLevelsModel.ostAndExtrasBeatmapLevelsRepository);
+                    AddOfficialBeatmapLevelsRepository(_beatmapLevelsModel.dlcBeatmapLevelsRepository);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"Error populating official songs: {ex.Message}");
+                    Plugin.Log.Error(ex);
+                }
+
+                #endregion
+
                 #region AddCustomBeatmaps
 
                 try
@@ -633,6 +676,7 @@ namespace SongCore
                                 var (_, level) = customLevel.Value;
                                 if (!wip)
                                 {
+                                    CustomLevelsById[level.levelID] = level;
                                     CustomLevels[songPath] = level;
                                 }
                                 else
@@ -741,6 +785,7 @@ namespace SongCore
                                         {
                                             var (_, level) = customLevel.Value;
                                             entry.Levels[songPath] = level;
+                                            CustomLevelsById[level.levelID] = level;
                                             foundSongPaths.TryAdd(songPath, false);
                                         }
 
@@ -935,6 +980,7 @@ namespace SongCore
         /// <param name="deleteFolder">Option to delete the base folder of the beatmap</param>
         public void DeleteSong(string folderPath, bool deleteFolder = true)
         {
+            DeletingSong?.Invoke();
             DeleteSingleSong(folderPath, deleteFolder);
             RefreshLevelPacks();
         }
@@ -946,6 +992,7 @@ namespace SongCore
         /// <param name="deleteFolder">Option to delete the base folder of the beatmap</param>
         public async Task DeleteSongsAsync(List<string> folderPaths, bool deleteFolder = true)
         {
+            DeletingSong?.Invoke();
             foreach (var folderPath in folderPaths)
             {
                 await Task.Run(() => DeleteSingleSong(folderPath, deleteFolder));
@@ -987,6 +1034,7 @@ namespace SongCore
                         }
                     }
 
+                    CustomLevelsById.TryRemove(level.levelID, out _);
                     _customLevelLoader._loadedBeatmapSaveData.Remove(level.levelID);
                     Hashing.MarkSongRemoved(folderPath);
                     _levelsRemovedSinceCacheClear = true;
@@ -1057,14 +1105,14 @@ namespace SongCore
                     }
                     return levels;
                 });
-                // Computed at most once per beatmap per refresh, and shared by all three caches so that
-                // validating them does not cost extra file access.
-                var directoryHash = Hashing.GetCurrentDirectoryHash(loadedSaveData.customLevelFolderInfo.folderPath);
-                Collections.CreateCustomLevelSongData(levelID, directoryHash, loadedSaveData);
+                // Both go through the signatures of 3.16.0, so that mods patching those still see every beatmap.
+                // The directory hash they need is computed at most once per beatmap per refresh and shared by all
+                // three caches, so validating them does not cost extra file access.
+                Collections.CreateCustomLevelSongData(levelID, loadedSaveData);
                 LoadedBeatmapSaveData.TryAdd(levelID, loadedSaveData);
 
                 Accessors.LevelIDAccessor(ref beatmapLevel) = levelID;
-                GetSongDuration(loadedSaveData, beatmapLevel, directoryHash);
+                GetSongDuration(loadedSaveData, beatmapLevel);
             }
             catch (Exception e)
             {
@@ -1366,6 +1414,14 @@ namespace SongCore
             return BeatmapLevelsModelSO.GetBeatmapLevel(CustomLevelLoader.kCustomLevelPrefixId + hash, true);
         }
 
+        /// <summary>
+        /// The signature of 3.16.0, kept for mods that call or patch it.
+        /// </summary>
+        private void GetSongDuration(CustomLevelLoader.LoadedSaveData loadedSaveData, BeatmapLevel beatmapLevel)
+        {
+            GetSongDuration(loadedSaveData, beatmapLevel, Hashing.GetCurrentDirectoryHash(loadedSaveData.customLevelFolderInfo.folderPath));
+        }
+
         private void GetSongDuration(CustomLevelLoader.LoadedSaveData loadedSaveData, BeatmapLevel beatmapLevel, long directoryHash)
         {
             try
@@ -1427,6 +1483,13 @@ namespace SongCore
                     {
                         Hashing.StoreAudioDuration(relativePath, directoryHash, length);
                     }
+                }
+
+                // 3.16.0 kept the level ID in the cached entry. It is not saved any more, but set here for mods
+                // that read it.
+                if (Hashing.cachedAudioData.TryGetValue(relativePath, out var current))
+                {
+                    current.id = beatmapLevel.levelID;
                 }
 
                 if (_config.ForceLongPreviews)
@@ -1608,5 +1671,29 @@ namespace SongCore
         }
 
         #endregion
+
+        /// <summary>
+        /// Attempts to get an official level by LevelId. Returns false if a matching level isn't found.
+        /// </summary>
+        /// <param name="levelId"></param>
+        /// <param name="song"></param>
+        /// <returns></returns>
+        public static bool TryGetOfficialLevelById(string levelId, out OfficialSongEntry song)
+        {
+            if (string.IsNullOrEmpty(levelId))
+            {
+                song = default(OfficialSongEntry);
+                return false;
+            }
+
+            return OfficialSongs.TryGetValue(levelId, out song);
+        }
+
+        public struct OfficialSongEntry
+        {
+            public BeatmapLevelsRepository LevelsRepository;
+            public BeatmapLevelPack LevelPack;
+            public BeatmapLevel BeatmapLevel;
+        }
     }
 }
