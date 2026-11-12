@@ -72,5 +72,12 @@ namespace SongCore.UI
             get => _config.DisableRotationSpawnLinesOverride;
             set => _config.DisableRotationSpawnLinesOverride = value;
         }
+
+        [UIValue("over100")]
+        public bool BlockOver100PercentDifficulties
+        {
+            get => _config.BlockOver100PercentDifficulties;
+            set => _config.BlockOver100PercentDifficulties = value;
+        }
     }
 }

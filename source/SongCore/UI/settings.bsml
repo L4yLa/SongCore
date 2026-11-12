@@ -11,4 +11,5 @@
     <text text='Misc Settings' italics='true' font-size='6.5' align='Left' size-delta-y='9'/>
     <checkbox-setting text='Force Long Song Previews' value='longPreviews' hover-hint='Force song previews to last the entire song past the starting point. Must fully refresh songs after changing this for it to take effect.'/>
     <checkbox-setting text='Always Show Rotation Note Spawn Lines' value='spawnlines' hover-hint='Mappers can hide the lower line that appears when a note spawns in certain maps that rotate, this setting allows these lines to always show.'/>
-</settings-container>
+    <checkbox-setting text='Block Maps That Can Score Over 100%' value='over100' hover-hint='Blocks difficulties where a chain head is also part of an arc. The game scores such a note out of 115 instead of 85, so leaderboards such as ScoreSaber may see scores over 100%. Practice stays available. Score submission is disabled if such a difficulty is played anyway, for example in multiplayer.'/>
+</settings-container>

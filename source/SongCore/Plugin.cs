@@ -31,6 +31,7 @@ namespace SongCore
             zenjector.Install<AppInstaller>(Location.App, Config.GetConfigFor(nameof(SongCore) + Path.DirectorySeparatorChar + nameof(SongCore)).Generated<PluginConfig>());
             zenjector.Install<MenuInstaller>(Location.Menu);
             zenjector.Install<GameInstaller>(Location.StandardPlayer);
+            zenjector.Install<PlayerInstaller>(Location.Player);
         }
 
         [OnStart]

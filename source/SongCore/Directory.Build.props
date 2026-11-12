@@ -17,7 +17,7 @@
   <!-- Overriding default csproj property values which would otherwise interfere with the manifest regeneration. -->
   <PropertyGroup>
     <Authors>L4yLa_Coop</Authors>
-    <Version>3.16.44</Version>
+    <Version>3.16.45</Version>
   </PropertyGroup>
 
 </Project>

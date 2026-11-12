@@ -16,10 +16,17 @@ namespace SongCore
         public virtual bool DisableOneSaberOverride { get; set; }
 
         /// <summary>
+        /// Blocks difficulties whose scores can go over 100% on leaderboards that count chain heads as 85 points,
+        /// such as ScoreSaber. Practice stays available, as scores from practice are not submitted. When such a
+        /// difficulty is played anyway, for example in multiplayer, score submission is disabled.
+        /// </summary>
+        public virtual bool BlockOver100PercentDifficulties { get; set; }
+
+        /// <summary>
         /// Logs every duplicate beatmap on its own line instead of one line per group of duplicates.
         /// Only configurable through the config file, as the verbose output is intended for diagnostics
         /// and is large enough that the log subsystem may start dropping messages on big libraries.
         /// </summary>
         public virtual bool VerboseDuplicateLogging { get; set; }
     }
-}
+}

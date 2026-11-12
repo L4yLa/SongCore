@@ -62,6 +62,7 @@ namespace SongCore.UI
         public SongData? songData;
         public SongData.DifficultyData? diffData;
         public bool wipFolder;
+        internal bool over100Percent;
 
         // Shown instead of the play button while the selected difficulty cannot be played. Created on first use.
         private GameObject? _checkButton;
@@ -232,6 +233,12 @@ namespace SongCore.UI
                             : new CustomCellInfo($"<size=75%>{req}", "Requirement", HaveReqIcon));
                     }
                 }
+            }
+
+            //Blocked because scores can go over 100% on some leaderboards
+            if (over100Percent)
+            {
+                customListTableData.Data.Add(new CustomCellInfo("<size=70%>A chain head in this difficulty is also part of an arc. The game scores it out of 115 instead of 85, so leaderboards such as ScoreSaber may see scores over 100%. Practice is still available, as it does not submit scores. This can be turned off in the SongCore settings.", "May Score Over 100%", MissingReqIcon));
             }
 
             //Contributors

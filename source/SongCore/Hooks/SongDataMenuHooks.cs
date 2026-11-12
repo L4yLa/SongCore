@@ -344,6 +344,22 @@ namespace SongCore.Hooks
                 }
             }
 
+            // A chain head that is also part of an arc scores out of 115 instead of 85, which leaderboards such as
+            // ScoreSaber may see as a score over 100%. Optional. Practice stays available, as scores from practice
+            // are not submitted.
+            var over100Percent = false;
+            if (_config.BlockOver100PercentDifficulties && !beatmapLevel.hasPrecalculatedData)
+            {
+                var beatmapLevelData = _customLevelLoader.LoadBeatmapLevelData(beatmapLevel);
+                if (beatmapLevelData != null && ScoreOverflowRisk.HasChainHeadOnArc(_songData, beatmapLevelData, beatmapKey, beatmapLevel.beatsPerMinute))
+                {
+                    over100Percent = true;
+                    playBlocked = true;
+                    _requirementsUI.ButtonGlowColor = true;
+                    _requirementsUI.ButtonInteractable = true;
+                }
+            }
+
             // Problems in the info file that affect playing, such as a missing beatmap file or requirements that
             // cannot be read. Other problems are only listed.
             if (_songData.HasValidationErrors(difficultyData))
@@ -372,6 +388,7 @@ namespace SongCore.Hooks
             _requirementsUI.songData = _songData;
             _requirementsUI.diffData = difficultyData;
             _requirementsUI.wipFolder = wipFolderSong;
+            _requirementsUI.over100Percent = over100Percent;
 
             ApplyButtonsState(practiceButton, playBlocked, practiceBlocked);
         }
